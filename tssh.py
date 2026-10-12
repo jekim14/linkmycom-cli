@@ -36,7 +36,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 DEFAULT_REPO = "jekim14/tssh"
 CONFIG_DIR = Path.home() / ".tssh"

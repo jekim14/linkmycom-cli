@@ -10,7 +10,8 @@
 
 ## 주의할 점.
 - 피어 이름은 `DNSName`의 첫 구간(MagicDNS 이름)을 기준으로 쓴다. 이 PC처럼 `HostName`(jekim)과 MagicDNS 이름(jekim-1)이 다를 수 있다.
-- `tailscale ssh` 하위 명령은 Windows 클라이언트에서 쓸 수 없으므로 항상 일반 `ssh`를 호출한다.
+- tssh는 항상 일반 `ssh`를 호출한다. Windows 클라이언트에서도 `tailscale ssh user@host`가 동작하는 것을 확인했지만(1.104.1, 2026-10-12), Tailscale SSH가 켜진 기기는 일반 `ssh`로도 키 없이 접속되므로 `ssh` 하나로 충분하다.
+- Tailscale SSH가 켜진 기기(2026-10-12 기준 miniui-Macmini만)는 `tailscale status --json`의 피어 항목에 `sshHostKeys`가 있다. 키·비밀번호 없이 접속되지만 사용자 이름은 ACL의 `ssh` 규칙이 제한한다(기본값은 그 기기의 비루트 사용자, 예: `jemac`). Linux·macOS는 `tailscale set --ssh`로 켤 수 있고 Windows에는 서버 기능이 없다.
 - ssh 인자는 호스트 이름 뒤의 모든 인자를 그대로 넘긴다. tssh 자체 옵션은 호스트 이름 앞에만 둔다.
 
 ## macOS(miniui-macmini) 설치에서 배운 것 (2026-10-12).

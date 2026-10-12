@@ -694,6 +694,17 @@ def version_in_source(src: str) -> str:
     return m.group(1) if m else ""
 
 
+def write_self(target: Path, src: str) -> None:
+    """새 소스를 임시 파일에 쓰고 원본의 실행 권한을 그대로 옮긴 뒤 원자적으로 교체한다."""
+    tmp = target.with_name(target.name + ".new")
+    tmp.write_text(src, encoding="utf-8")
+    try:
+        shutil.copymode(target, tmp)
+    except OSError:
+        pass
+    os.replace(tmp, target)
+
+
 def cmd_update(cfg: dict, check_only: bool) -> int:
     repo = cfg.get("update_repo") or DEFAULT_REPO
     print(f"저장소 {repo} 에서 최신 릴리스를 확인합니다...")
@@ -712,9 +723,7 @@ def cmd_update(cfg: dict, check_only: bool) -> int:
         print("적용하려면: tssh update")
         return 0
     target = Path(__file__).resolve()
-    tmp = target.with_suffix(".py.new")
-    tmp.write_text(src, encoding="utf-8")
-    os.replace(tmp, target)
+    write_self(target, src)
     state = load_json(STATE_PATH)
     state["last_update_check"] = datetime.now(timezone.utc).isoformat()
     state.pop("update_available", None)

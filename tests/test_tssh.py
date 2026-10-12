@@ -183,6 +183,20 @@ class PeerTests(unittest.TestCase):
             srv.close()
         self.assertEqual(st, {"BackendState": "Running", "Peer": {}})
 
+    def test_write_self_keeps_content_and_mode(self):
+        import os
+        import stat
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "tssh"
+            target.write_text("old", encoding="utf-8")
+            os.chmod(target, 0o755)
+            tssh.write_self(target, 'new\n__version__ = "9.9.9"\n')
+            self.assertEqual(target.read_text(encoding="utf-8"), 'new\n__version__ = "9.9.9"\n')
+            self.assertFalse((Path(d) / "tssh.new").exists())
+            if os.name != "nt":
+                self.assertTrue(target.stat().st_mode & stat.S_IXUSR, "실행 권한이 유지되어야 한다")
+
     def test_version_helpers(self):
         self.assertEqual(tssh.parse_version("v1.2.10"), (1, 2, 10))
         self.assertGreater(tssh.parse_version("0.2.0"), tssh.parse_version("0.1.9"))

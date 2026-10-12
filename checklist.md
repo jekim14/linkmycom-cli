@@ -11,3 +11,4 @@
 - [x] GitHub 저장소 게시와 첫 릴리스 v0.1.0 (2026-10-12, https://github.com/jekim14/tssh/releases/tag/v0.1.0). 설치본 `tssh update --check` 로 릴리스 조회 확인.
 - [ ] 대화형 선택기를 실제 터미널에서 눌러 보기 (비대화형 환경에서는 검증 불가).
 - [x] Mac mini(miniui-macmini) 설치: `~/.local/bin/tssh`, 테스트 13개 통과, 피어 11대 표시 (2026-10-12). CLI가 로그아웃된 시스템 확장에 붙는 문제를 소켓 LocalAPI 조회로 해결.
+- [x] v0.1.1 릴리스 (macOS 소켓 LocalAPI 조회, PowerShell 래퍼), v0.1.2 릴리스 (update 시 실행 권한 유지). Windows·Mac 설치본 모두 `tssh update` 로 0.1.2 적용 확인 (2026-10-12).

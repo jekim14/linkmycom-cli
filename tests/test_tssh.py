@@ -140,6 +140,49 @@ class PeerTests(unittest.TestCase):
         self.assertNotIn("Host pfl\n", block)
         self.assertIn("Host pfl-server\n", block)
 
+    def test_tailscale_candidates(self):
+        import os
+        old = os.environ.get("TSSH_TAILSCALE")
+        os.environ["TSSH_TAILSCALE"] = "/tmp/forced-tailscale"
+        try:
+            self.assertEqual(tssh.tailscale_candidates(), ["/tmp/forced-tailscale"])
+        finally:
+            if old is None:
+                del os.environ["TSSH_TAILSCALE"]
+            else:
+                os.environ["TSSH_TAILSCALE"] = old
+        cands = tssh.tailscale_candidates()
+        self.assertEqual(len(cands), len({os.path.normcase(os.path.realpath(c)) for c in cands}))
+        self.assertIsNone(tssh.run_status("/nonexistent/tailscale-binary"))
+
+    def test_status_from_socket(self):
+        import socket
+        import tempfile
+        import threading
+        if not hasattr(socket, "AF_UNIX"):
+            self.skipTest("AF_UNIX 없음")
+        self.assertIsNone(tssh.status_from_socket("/nonexistent/tailscaled.socket"))
+        with tempfile.TemporaryDirectory() as d:
+            path = str(Path(d) / "t.sock")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(path)
+            srv.listen(1)
+            body = b'{"BackendState": "Running", "Peer": {}}'
+
+            def serve():
+                conn, _ = srv.accept()
+                req = conn.recv(4096)
+                assert req.startswith(b"GET /localapi/v0/status "), req
+                conn.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n" + body)
+                conn.close()
+
+            t = threading.Thread(target=serve, daemon=True)
+            t.start()
+            st = tssh.status_from_socket(path)
+            t.join(5)
+            srv.close()
+        self.assertEqual(st, {"BackendState": "Running", "Peer": {}})
+
     def test_version_helpers(self):
         self.assertEqual(tssh.parse_version("v1.2.10"), (1, 2, 10))
         self.assertGreater(tssh.parse_version("0.2.0"), tssh.parse_version("0.1.9"))

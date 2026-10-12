@@ -25,6 +25,17 @@ $shim = Join-Path $dest "tssh.cmd"
 $shimBody = "@echo off`r`n`"$python`" `"%~dp0tssh.py`" %*`r`n"
 [System.IO.File]::WriteAllText($shim, $shimBody, [System.Text.Encoding]::ASCII)
 
+# PowerShell 에서는 .ps1 래퍼가 먼저 잡혀 따옴표·파이프가 든 인자도 그대로 전달된다. 실행 정책이 막으면 만들지 않는다.
+$ps1 = Join-Path $dest "tssh.ps1"
+$policy = Get-ExecutionPolicy
+if ($policy -in @("Restricted", "AllSigned")) {
+    if (Test-Path $ps1) { Remove-Item $ps1 -Force }
+    Write-Host "실행 정책이 $policy 이라 tssh.ps1 래퍼는 건너뜁니다 (tssh.cmd 만 사용)."
+} else {
+    $ps1Body = "# tssh PowerShell 래퍼. 인자를 그대로 tssh.py 에 넘긴다.`r`n& `"$python`" `"`$PSScriptRoot\tssh.py`" @args`r`nexit `$LASTEXITCODE`r`n"
+    [System.IO.File]::WriteAllText($ps1, $ps1Body, (New-Object System.Text.UTF8Encoding $true))
+}
+
 if (-not $NoPath) {
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $parts = @()

@@ -59,6 +59,10 @@ sh install.sh
 
 대화형 목록에서 처음 접속하는 호스트를 고르면 사용자 이름을 한 번 묻고 저장합니다.
 
+### Tailscale CLI를 고르는 방식
+
+`tailscale status --json`을 PATH의 `tailscale`, Windows·macOS 앱에 든 CLI, Homebrew 경로 순으로 시도해 실제로 `Running` 상태인 것을 씁니다. macOS에서 Homebrew `tailscaled`와 Tailscale.app이 함께 떠 있으면 CLI가 로그아웃된 쪽에 붙는 경우가 있는데, 이때는 `/var/run/tailscaled.socket`의 LocalAPI를 직접 읽어 연결된 데몬의 상태를 가져옵니다. 특정 CLI를 강제하려면 환경 변수 `TSSH_TAILSCALE=/경로/tailscale`을 설정하세요.
+
 ### 파일 위치
 
 - 설정: `~/.tssh/config.json`

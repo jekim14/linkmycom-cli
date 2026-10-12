@@ -121,41 +121,126 @@ def load_config() -> dict:
 # ---------------------------------------------------------------- Tailscale.
 
 
-def tailscale_bin() -> str | None:
+TAILSCALE_KNOWN_PATHS = (
+    r"C:\Program Files\Tailscale\tailscale.exe",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "/usr/bin/tailscale",
+)
+
+
+def tailscale_candidates() -> list[str]:
+    """tailscale CLI 후보를 중복 없이 모은다. 환경 변수 TSSH_TAILSCALE 이 있으면 그것만 쓴다."""
+    forced = os.environ.get("TSSH_TAILSCALE")
+    if forced:
+        return [forced]
+    cands: list[str] = []
     found = shutil.which("tailscale")
     if found:
-        return found
-    for cand in (
-        r"C:\Program Files\Tailscale\tailscale.exe",
-        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-        "/usr/local/bin/tailscale",
-        "/usr/bin/tailscale",
-    ):
+        cands.append(found)
+    for cand in TAILSCALE_KNOWN_PATHS:
         if os.path.exists(cand):
-            return cand
-    return None
+            cands.append(cand)
+    seen: set[str] = set()
+    unique = []
+    for cnd in cands:
+        key = os.path.normcase(os.path.realpath(cnd))
+        if key not in seen:
+            seen.add(key)
+            unique.append(cnd)
+    return unique
 
 
-def tailscale_status() -> dict:
-    exe = tailscale_bin()
-    if not exe:
-        die("tailscale 명령을 찾지 못했습니다. Tailscale이 설치되어 있는지 확인하세요.")
+def run_status(exe: str) -> dict | None:
     try:
         proc = subprocess.run(
             [exe, "status", "--json"], capture_output=True, text=True, encoding="utf-8", timeout=20
         )
-    except subprocess.TimeoutExpired:
-        die("tailscale status 응답이 없습니다. Tailscale 서비스가 실행 중인지 확인하세요.")
+    except (subprocess.TimeoutExpired, OSError):
+        return None
     if proc.returncode != 0:
-        die(f"tailscale status 실패: {proc.stderr.strip() or proc.stdout.strip()}")
+        return None
     try:
         status = json.loads(proc.stdout)
     except ValueError:
-        die("tailscale status 출력을 해석하지 못했습니다.")
-    state = status.get("BackendState")
-    if state != "Running":
-        warn(f"Tailscale 상태가 '{state}' 입니다. 로그인/연결 상태를 확인하세요.")
-    return status
+        return None
+    return status if isinstance(status, dict) else None
+
+
+TAILSCALED_SOCKETS = (
+    "/var/run/tailscaled.socket",
+    "/var/run/tailscale/tailscaled.sock",
+)
+
+
+def status_from_socket(path: str, timeout: float = 5.0) -> dict | None:
+    """tailscaled 유닉스 소켓의 LocalAPI(/localapi/v0/status) 를 직접 읽는다. 실패하면 None."""
+    import socket
+
+    if not hasattr(socket, "AF_UNIX") or not os.path.exists(path):
+        return None
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(path)
+        s.sendall(b"GET /localapi/v0/status HTTP/1.0\r\nHost: local-tailscaled.sock\r\n\r\n")
+        chunks = []
+        while True:
+            data = s.recv(65536)
+            if not data:
+                break
+            chunks.append(data)
+        s.close()
+    except OSError:
+        return None
+    raw = b"".join(chunks)
+    head, _, body = raw.partition(b"\r\n\r\n")
+    first = head.split(b"\r\n", 1)[0]
+    if not first.startswith(b"HTTP/1.") or b" 200" not in first:
+        return None
+    try:
+        status = json.loads(body.decode("utf-8"))
+    except ValueError:
+        return None
+    return status if isinstance(status, dict) else None
+
+
+def tailscale_status() -> dict:
+    """여러 tailscale CLI 와 데몬 소켓 중 실제로 연결된(Running) 것을 고른다.
+
+    macOS 처럼 Homebrew tailscaled 와 Tailscale.app 이 함께 있으면 CLI 가 로그인 안 된 쪽에 붙을 수 있다.
+    그런 경우 유닉스 소켓의 LocalAPI 를 직접 읽어 연결된 데몬의 상태를 얻는다.
+    """
+    cands = tailscale_candidates()
+    sockets = [] if os.name == "nt" else [p for p in TAILSCALED_SOCKETS if os.path.exists(p)]
+    if not cands and not sockets:
+        die("tailscale 명령을 찾지 못했습니다. Tailscale이 설치되어 있는지 확인하세요.")
+    fallback: dict | None = None
+    tried: list[str] = []
+    for exe in cands:
+        tried.append(exe)
+        status = run_status(exe)
+        if status is None:
+            continue
+        if status.get("BackendState") == "Running":
+            return status
+        if fallback is None:
+            fallback = status
+    for path in sockets:
+        tried.append(path)
+        status = status_from_socket(path)
+        if status is None:
+            continue
+        if status.get("BackendState") == "Running":
+            return status
+        if fallback is None:
+            fallback = status
+    if fallback is None:
+        die("tailscale status 를 실행하지 못했습니다. Tailscale 서비스가 실행 중인지 확인하세요. "
+            f"(시도한 경로: {', '.join(tried)})")
+    warn(f"Tailscale 상태가 '{fallback.get('BackendState')}' 입니다. 로그인/연결 상태를 확인하세요.")
+    return fallback
 
 
 def load_peers(status: dict) -> list[dict]:
@@ -393,7 +478,11 @@ def build_ssh_cmd(
 
 
 def quote_cmd(cmd: list[str]) -> str:
-    return " ".join(f'"{a}"' if " " in a else a for a in cmd)
+    if os.name == "nt":
+        return subprocess.list2cmdline(cmd)
+    import shlex
+
+    return shlex.join(cmd)
 
 
 def connect(peer: dict, cfg: dict, blocks: list[dict], extra: list[str], user: str | None, port: str | None,

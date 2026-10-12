@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 # tssh(DeskTools 의 SSH 접속기)를 ~/.local/bin 에 설치하는 macOS/Linux 설치 스크립트.
-# 원격 한 줄 설치 (tssh.py 가 옆에 없으면 DeskTools 저장소에서 내려받는다):
-#   curl -fsSL https://raw.githubusercontent.com/jekim14/desktools/HEAD/tools/tssh/install.sh | sh
+# 원격 한 줄 설치 (tssh.py 가 옆에 없으면 공개 거울 저장소 jekim14/tssh 에서 내려받는다):
+#   curl -fsSL https://raw.githubusercontent.com/jekim14/tssh/HEAD/tools/tssh/install.sh | sh
 set -eu
-repo="${TSSH_REPO:-jekim14/desktools}"
+repo="${TSSH_REPO:-jekim14/tssh}"
 ref="${TSSH_REF:-HEAD}"
 dest="${TSSH_BIN_DIR:-$HOME/.local/bin}"
 if ! command -v python3 >/dev/null 2>&1; then

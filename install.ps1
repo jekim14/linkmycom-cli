@@ -1,12 +1,13 @@
 # tssh Windows installer (part of DeskTools): copies tssh.py to %LOCALAPPDATA%\tssh, writes shims, adds the folder to the user PATH.
 # This file is intentionally ASCII-only (no BOM, English messages) so that
-#   irm https://raw.githubusercontent.com/jekim14/desktools/HEAD/tools/tssh/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/jekim14/tssh/HEAD/tools/tssh/install.ps1 | iex
 # works in Windows PowerShell 5.1, which decodes GitHub's response as Latin-1.
+# jekim14/tssh is the public mirror of tools/tssh in the private DeskTools repository.
 # Local usage:  powershell -ExecutionPolicy Bypass -File install.ps1 [-NoPath] [-NoSetup]
 param(
     [switch]$NoPath,
     [switch]$NoSetup,
-    [string]$Repo = "jekim14/desktools",
+    [string]$Repo = "jekim14/tssh",
     [string]$Ref = "HEAD"
 )
 

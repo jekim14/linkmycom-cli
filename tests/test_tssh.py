@@ -225,14 +225,16 @@ class PeerTests(unittest.TestCase):
                          "https://raw.githubusercontent.com/a/b/HEAD/tools/tssh/authorized_keys")
         self.assertEqual(tssh.keys_url({"update_repo": "a/b", "update_ref": "v1"}),
                          "https://raw.githubusercontent.com/a/b/v1/tools/tssh/authorized_keys")
-        self.assertEqual(tssh.DEFAULT_REPO, "jekim14/desktools")
+        self.assertEqual(tssh.DEFAULT_REPO, "jekim14/tssh")
 
     def test_migrate_config_drops_legacy_repo(self):
-        cfg = {"update_repo": "jekim14/tssh", "keys_url": "https://raw.githubusercontent.com/jekim14/tssh/HEAD/authorized_keys",
+        legacy = next(iter(tssh.LEGACY_REPOS))
+        cfg = {"update_repo": legacy, "keys_url": f"https://raw.githubusercontent.com/{legacy}/HEAD/x",
                "default_user": "idonl"}
         self.assertTrue(tssh.migrate_config(cfg))
         self.assertEqual(cfg, {"default_user": "idonl"})
-        self.assertEqual(tssh.keys_url(cfg), "https://raw.githubusercontent.com/jekim14/desktools/HEAD/tools/tssh/authorized_keys")
+        self.assertEqual(tssh.keys_url(cfg),
+                         f"https://raw.githubusercontent.com/{tssh.DEFAULT_REPO}/HEAD/tools/tssh/authorized_keys")
         kept = {"update_repo": "someone/else"}
         self.assertFalse(tssh.migrate_config(kept))
         self.assertEqual(kept, {"update_repo": "someone/else"})

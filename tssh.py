@@ -43,12 +43,13 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
-# tssh 는 DeskTools 저장소(jekim14/desktools)의 tools/tssh 에서 관리한다.
-DEFAULT_REPO = "jekim14/desktools"
-# 0.1.x 가 설정 파일에 남긴 옛 저장소 이름. 읽을 때 지워 기본 저장소를 쓰게 한다.
-LEGACY_REPOS = {"jekim14/tssh"}
+# tssh 는 DeskTools 저장소(jekim14/desktools, 비공개)의 tools/tssh 에서 개발하고, 공개 거울 저장소 jekim14/tssh 의
+# 같은 경로로 배포한다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
+DEFAULT_REPO = "jekim14/tssh"
+# 설정 파일에 남아 있어도 raw 주소로 받을 수 없는 저장소 이름. 읽을 때 지워 기본 저장소를 쓰게 한다.
+LEGACY_REPOS = {"jekim14/desktools"}
 DEFAULT_UPDATE_REF = "HEAD"
 DEFAULT_UPDATE_PATH = "tools/tssh/tssh.py"
 DEFAULT_KEYS_PATH = "tools/tssh/authorized_keys"

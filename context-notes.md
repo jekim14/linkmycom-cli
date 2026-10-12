@@ -19,3 +19,9 @@
 - Mac 설치 위치는 `~/.local/bin/tssh`(PATH에 이미 있음). 기본 사용자 이름이 `jemac`이라 Windows 피어에 붙을 때는 `tssh set <이름> user=idonl` 또는 `tssh config default_user=idonl`이 필요하다.
 - Windows 설치본에 `tssh.ps1` 래퍼를 추가했다. PowerShell에서 `.cmd` 셈을 거치면 큰따옴표가 든 인자가 cmd.exe에 의해 깨지기 때문이다. 실행 정책이 Restricted/AllSigned면 만들지 않는다.
 - 원격 명령 전달 시 PowerShell → ssh → zsh 의 따옴표 해석이 세 겹이라, 큰따옴표로 감싼 문자열 안에 작은따옴표를 쓰는 편이 안전했다.
+
+## 다른 기기 설치 시도와 한 줄 설치 (2026-10-12).
+- 온라인 피어 중 jekimlabtop·pfl 은 22번 포트 접속 거부, officehermes·pfl-sever 는 같은 LAN(192.168.0.x)에서 tailscale ping 은 되지만 22/5985 모두 닫힘, muse 는 ping 무응답. SSH·WinRM 서버가 없으므로 원격 설치는 불가능하고, 각 기기에서 한 줄 설치 명령을 직접 실행해야 한다.
+- `install.ps1` 은 ASCII 전용으로 유지한다. Windows PowerShell 5.1 의 `irm` 은 GitHub 의 `application/octet-stream` 응답을 Latin-1 로 해석하므로 BOM 이나 한글이 있으면 첫 줄이 `ï»¿#` 토큰이 되어 param 블록부터 깨진다. 한글 역할 주석 규칙의 예외로 둔 이유다.
+- `releases/latest/download/...` 주소는 릴리스 게시 직후 수십 초 동안 CDN(varnish) 캐시 때문에 이전 릴리스 자산으로 리다이렉트될 수 있다. 게시 직후 바로 검증하면 옛 파일이 내려온다. 1분쯤 뒤에 다시 확인하면 된다.
+- 설치 스크립트가 `latest/download/tssh.py` 를 받으므로 릴리스 자산에는 항상 `tssh.py`, `install.ps1`, `install.sh` 세 파일이 있어야 한다 (`release.ps1` 이 올린다).

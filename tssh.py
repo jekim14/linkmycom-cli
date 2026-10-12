@@ -43,10 +43,12 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 # tssh 는 DeskTools 저장소(jekim14/desktools)의 tools/tssh 에서 관리한다.
 DEFAULT_REPO = "jekim14/desktools"
+# 0.1.x 가 설정 파일에 남긴 옛 저장소 이름. 읽을 때 지워 기본 저장소를 쓰게 한다.
+LEGACY_REPOS = {"jekim14/tssh"}
 DEFAULT_UPDATE_REF = "HEAD"
 DEFAULT_UPDATE_PATH = "tools/tssh/tssh.py"
 DEFAULT_KEYS_PATH = "tools/tssh/authorized_keys"
@@ -127,12 +129,26 @@ def save_json(path: Path, data: dict) -> None:
     os.replace(tmp, path)
 
 
+def migrate_config(cfg: dict) -> bool:
+    """옛 버전이 남긴 설정을 현재 기본값으로 옮긴다. 바뀐 것이 있으면 True."""
+    changed = False
+    if cfg.get("update_repo") in LEGACY_REPOS:
+        cfg.pop("update_repo", None)
+        cfg.pop("keys_url", None)
+        changed = True
+    return changed
+
+
 def load_config() -> dict:
     cfg = load_json(CONFIG_PATH)
+    if migrate_config(cfg):
+        try:
+            save_json(CONFIG_PATH, cfg)
+        except OSError:
+            pass
     cfg.setdefault("hosts", {})
     cfg.setdefault("use_magicdns", False)
     cfg.setdefault("auto_update_check", True)
-    cfg.setdefault("update_repo", DEFAULT_REPO)
     cfg.setdefault("ssh_options", {"ServerAliveInterval": "60"})
     return cfg
 

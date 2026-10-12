@@ -12,3 +12,6 @@
 - [ ] 대화형 선택기를 실제 터미널에서 눌러 보기 (비대화형 환경에서는 검증 불가).
 - [x] Mac mini(miniui-macmini) 설치: `~/.local/bin/tssh`, 테스트 13개 통과, 피어 11대 표시 (2026-10-12). CLI가 로그아웃된 시스템 확장에 붙는 문제를 소켓 LocalAPI 조회로 해결.
 - [x] v0.1.1 릴리스 (macOS 소켓 LocalAPI 조회, PowerShell 래퍼), v0.1.2 릴리스 (update 시 실행 권한 유지). Windows·Mac 설치본 모두 `tssh update` 로 0.1.2 적용 확인 (2026-10-12).
+- [x] Mac mini 기본 사용자 `idonl` 설정 (`tssh config default_user=idonl`, 2026-10-12).
+- [x] 설치 스크립트가 tssh.py 없이도 최신 릴리스에서 내려받도록 변경. Windows 단독 실행, Mac 파일·파이프 모드 모두 확인.
+- [ ] 다른 기기 설치: jekimlabtop·pfl 은 22번 포트 거부, officehermes·pfl-sever 는 LAN 에서 응답하지만 22/5985 닫힘, muse 는 ping 무응답. SSH 서버가 없어 원격 설치 불가. 각 기기에서 README 의 한 줄 설치 명령을 직접 실행해야 한다. 오프라인·모바일 기기(jekim, macmini, iPad, 폴드폰)는 대상 아님.

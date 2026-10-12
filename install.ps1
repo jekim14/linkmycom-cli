@@ -1,12 +1,23 @@
 ﻿# tssh 를 %LOCALAPPDATA%\tssh 에 설치하고 PATH 에 등록하는 Windows 설치 스크립트.
 # 사용법:  powershell -ExecutionPolicy Bypass -File install.ps1 [-NoPath]
+# 원격 한 줄 설치 (tssh.py 가 옆에 없으면 최신 릴리스에서 내려받는다):
+#   irm https://github.com/jekim14/tssh/releases/latest/download/install.ps1 | iex
 param(
-    [switch]$NoPath
+    [switch]$NoPath,
+    [string]$Repo = "jekim14/tssh"
 )
 
 $ErrorActionPreference = "Stop"
-$src = Join-Path $PSScriptRoot "tssh.py"
-if (-not (Test-Path $src)) { throw "tssh.py 를 찾지 못했습니다: $src" }
+$src = if ($PSScriptRoot) { Join-Path $PSScriptRoot "tssh.py" } else { "" }
+$downloaded = $null
+if (-not $src -or -not (Test-Path $src)) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $url = "https://github.com/$Repo/releases/latest/download/tssh.py"
+    $downloaded = Join-Path ([System.IO.Path]::GetTempPath()) ("tssh-" + [guid]::NewGuid().ToString("N") + ".py")
+    Write-Host "tssh.py 를 내려받습니다: $url"
+    Invoke-WebRequest -Uri $url -OutFile $downloaded -UseBasicParsing
+    $src = $downloaded
+}
 
 $python = $null
 foreach ($name in @("python", "python3", "py")) {
@@ -46,6 +57,7 @@ if (-not $NoPath) {
     }
 }
 
+if ($downloaded -and (Test-Path $downloaded)) { Remove-Item $downloaded -Force }
 $installed = & $python (Join-Path $dest "tssh.py") version
 Write-Host "설치 완료: $installed  →  $dest"
 Write-Host "실행: tssh        (새 터미널에서)"

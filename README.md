@@ -14,21 +14,25 @@ Tailscale SSH 접속기 v0.1.0   온라인 6/11
 
 ## 설치
 
+설치할 기기에서 명령 한 줄을 실행하면 최신 릴리스를 받아 설치합니다. Python 3.10 이상이 먼저 설치되어 있어야 합니다.
+
 Windows (PowerShell):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
+irm https://github.com/jekim14/tssh/releases/latest/download/install.ps1 | iex
 ```
 
-`%LOCALAPPDATA%\tssh` 에 복사하고 사용자 PATH에 등록합니다. 새 터미널을 열면 `tssh` 명령을 쓸 수 있습니다. PATH를 건드리지 않으려면 `-NoPath` 를 붙이세요.
+`%LOCALAPPDATA%\tssh` 에 설치하고 사용자 PATH에 등록합니다. 새 터미널을 열면 `tssh` 명령을 쓸 수 있습니다. 저장소를 받아 둔 상태라면 `powershell -ExecutionPolicy Bypass -File install.ps1` 로도 설치되며, PATH를 건드리지 않으려면 `-NoPath` 를 붙입니다.
 
 macOS / Linux:
 
 ```bash
-sh install.sh
+curl -fsSL https://github.com/jekim14/tssh/releases/latest/download/install.sh | sh
 ```
 
-`~/.local/bin/tssh` 로 설치됩니다. 다른 위치를 쓰려면 `TSSH_BIN_DIR=/usr/local/bin sh install.sh` 처럼 지정합니다.
+`~/.local/bin/tssh` 로 설치됩니다. 다른 위치를 쓰려면 `TSSH_BIN_DIR=/usr/local/bin` 을 앞에 붙이고, 저장소를 받아 둔 상태라면 `sh install.sh` 로도 설치됩니다.
+
+SSH 서버가 켜져 있는 기기라면 다른 기기에서 `tssh <이름> "curl -fsSL .../install.sh | sh"` 처럼 원격으로 설치할 수도 있습니다. SSH 서버가 없는 Windows PC에는 그 PC에서 직접 위 명령을 실행하세요.
 
 ## 사용법
 

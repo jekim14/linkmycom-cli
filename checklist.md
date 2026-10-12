@@ -8,5 +8,5 @@
 - [x] 실제 동작 확인: `tssh list`, `tssh -n mac`(기존 ssh config의 jemac 반영), 설치본 `tssh.cmd mac ... echo TSSH_OK` 가 Mac mini에서 TSSH_OK 반환.
 - [x] 수정한 버그: 원격 명령이 호스트보다 앞에 놓이던 문제(`split_ssh_args` 로 해결), Windows 파이프 출력 cp949 깨짐(UTF-8 고정).
 - [x] README.md, LICENSE, git 저장소 초기화와 커밋.
-- [ ] GitHub 저장소 게시와 첫 릴리스 (`release.ps1 -Version 0.1.0 -CreateRepo`) — 사용자 승인 후 실행.
+- [x] GitHub 저장소 게시와 첫 릴리스 v0.1.0 (2026-10-12, https://github.com/jekim14/tssh/releases/tag/v0.1.0). 설치본 `tssh update --check` 로 릴리스 조회 확인.
 - [ ] 대화형 선택기를 실제 터미널에서 눌러 보기 (비대화형 환경에서는 검증 불가).

@@ -1,7 +1,8 @@
-﻿# tssh 를 %LOCALAPPDATA%\tssh 에 설치하고 PATH 에 등록하는 Windows 설치 스크립트.
-# 사용법:  powershell -ExecutionPolicy Bypass -File install.ps1 [-NoPath]
-# 원격 한 줄 설치 (tssh.py 가 옆에 없으면 최신 릴리스에서 내려받는다):
+# tssh Windows installer: copies tssh.py to %LOCALAPPDATA%\tssh, writes shims, adds the folder to the user PATH.
+# This file is intentionally ASCII-only (no BOM, English messages) so that
 #   irm https://github.com/jekim14/tssh/releases/latest/download/install.ps1 | iex
+# works in Windows PowerShell 5.1, which decodes GitHub's octet-stream response as Latin-1.
+# Local usage:  powershell -ExecutionPolicy Bypass -File install.ps1 [-NoPath]
 param(
     [switch]$NoPath,
     [string]$Repo = "jekim14/tssh"
@@ -14,7 +15,7 @@ if (-not $src -or -not (Test-Path $src)) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $url = "https://github.com/$Repo/releases/latest/download/tssh.py"
     $downloaded = Join-Path ([System.IO.Path]::GetTempPath()) ("tssh-" + [guid]::NewGuid().ToString("N") + ".py")
-    Write-Host "tssh.py 를 내려받습니다: $url"
+    Write-Host "Downloading tssh.py from $url"
     Invoke-WebRequest -Uri $url -OutFile $downloaded -UseBasicParsing
     $src = $downloaded
 }
@@ -24,27 +25,29 @@ foreach ($name in @("python", "python3", "py")) {
     $cmd = Get-Command $name -ErrorAction SilentlyContinue
     if ($cmd -and $cmd.Source -notlike "*WindowsApps*") { $python = $cmd.Source; break }
 }
-if (-not $python) { throw "Python 3 를 찾지 못했습니다. https://www.python.org 에서 설치한 뒤 다시 실행하세요." }
+if (-not $python) { throw "Python 3 was not found. Install it from https://www.python.org and run this again." }
 $ver = & $python -c "import sys; print('%d.%d' % sys.version_info[:2])"
-if ([version]$ver -lt [version]"3.10") { throw "Python 3.10 이상이 필요합니다 (현재 $ver, $python)." }
+if ([version]$ver -lt [version]"3.10") { throw "Python 3.10 or newer is required (found $ver at $python)." }
 
 $dest = Join-Path $env:LOCALAPPDATA "tssh"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Item $src (Join-Path $dest "tssh.py") -Force
 
+# cmd.exe shim.
 $shim = Join-Path $dest "tssh.cmd"
 $shimBody = "@echo off`r`n`"$python`" `"%~dp0tssh.py`" %*`r`n"
 [System.IO.File]::WriteAllText($shim, $shimBody, [System.Text.Encoding]::ASCII)
 
-# PowerShell 에서는 .ps1 래퍼가 먼저 잡혀 따옴표·파이프가 든 인자도 그대로 전달된다. 실행 정책이 막으면 만들지 않는다.
+# PowerShell wrapper: PowerShell resolves tssh.ps1 before tssh.cmd, so quoted arguments survive intact.
+# Skipped when the execution policy would refuse to run it.
 $ps1 = Join-Path $dest "tssh.ps1"
 $policy = Get-ExecutionPolicy
 if ($policy -in @("Restricted", "AllSigned")) {
     if (Test-Path $ps1) { Remove-Item $ps1 -Force }
-    Write-Host "실행 정책이 $policy 이라 tssh.ps1 래퍼는 건너뜁니다 (tssh.cmd 만 사용)."
+    Write-Host "Execution policy is $policy; skipping the tssh.ps1 wrapper (tssh.cmd will be used)."
 } else {
-    $ps1Body = "# tssh PowerShell 래퍼. 인자를 그대로 tssh.py 에 넘긴다.`r`n& `"$python`" `"`$PSScriptRoot\tssh.py`" @args`r`nexit `$LASTEXITCODE`r`n"
-    [System.IO.File]::WriteAllText($ps1, $ps1Body, (New-Object System.Text.UTF8Encoding $true))
+    $ps1Body = "# tssh PowerShell wrapper: forwards all arguments to tssh.py.`r`n& `"$python`" `"`$PSScriptRoot\tssh.py`" @args`r`nexit `$LASTEXITCODE`r`n"
+    [System.IO.File]::WriteAllText($ps1, $ps1Body, [System.Text.Encoding]::ASCII)
 }
 
 if (-not $NoPath) {
@@ -53,11 +56,11 @@ if (-not $NoPath) {
     if ($userPath) { $parts = $userPath.Split(";") | Where-Object { $_ -ne "" } }
     if ($parts -notcontains $dest) {
         [Environment]::SetEnvironmentVariable("Path", (($parts + $dest) -join ";"), "User")
-        Write-Host "사용자 PATH 에 $dest 를 추가했습니다. 새 터미널을 열어야 적용됩니다."
+        Write-Host "Added $dest to the user PATH. Open a new terminal for it to take effect."
     }
 }
 
 if ($downloaded -and (Test-Path $downloaded)) { Remove-Item $downloaded -Force }
 $installed = & $python (Join-Path $dest "tssh.py") version
-Write-Host "설치 완료: $installed  →  $dest"
-Write-Host "실행: tssh        (새 터미널에서)"
+Write-Host "Installed: $installed  ->  $dest"
+Write-Host "Run: tssh   (in a new terminal)"

@@ -1,11 +1,13 @@
-# tssh Windows installer: copies tssh.py to %LOCALAPPDATA%\tssh, writes shims, adds the folder to the user PATH.
+# tssh Windows installer (part of DeskTools): copies tssh.py to %LOCALAPPDATA%\tssh, writes shims, adds the folder to the user PATH.
 # This file is intentionally ASCII-only (no BOM, English messages) so that
-#   irm https://github.com/jekim14/tssh/releases/latest/download/install.ps1 | iex
-# works in Windows PowerShell 5.1, which decodes GitHub's octet-stream response as Latin-1.
-# Local usage:  powershell -ExecutionPolicy Bypass -File install.ps1 [-NoPath]
+#   irm https://raw.githubusercontent.com/jekim14/desktools/HEAD/tools/tssh/install.ps1 | iex
+# works in Windows PowerShell 5.1, which decodes GitHub's response as Latin-1.
+# Local usage:  powershell -ExecutionPolicy Bypass -File install.ps1 [-NoPath] [-NoSetup]
 param(
     [switch]$NoPath,
-    [string]$Repo = "jekim14/tssh"
+    [switch]$NoSetup,
+    [string]$Repo = "jekim14/desktools",
+    [string]$Ref = "HEAD"
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,7 +15,7 @@ $src = if ($PSScriptRoot) { Join-Path $PSScriptRoot "tssh.py" } else { "" }
 $downloaded = $null
 if (-not $src -or -not (Test-Path $src)) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $url = "https://github.com/$Repo/releases/latest/download/tssh.py"
+    $url = "https://raw.githubusercontent.com/$Repo/$Ref/tools/tssh/tssh.py"
     $downloaded = Join-Path ([System.IO.Path]::GetTempPath()) ("tssh-" + [guid]::NewGuid().ToString("N") + ".py")
     Write-Host "Downloading tssh.py from $url"
     Invoke-WebRequest -Uri $url -OutFile $downloaded -UseBasicParsing
@@ -64,3 +66,8 @@ if ($downloaded -and (Test-Path $downloaded)) { Remove-Item $downloaded -Force }
 $installed = & $python (Join-Path $dest "tssh.py") version
 Write-Host "Installed: $installed  ->  $dest"
 Write-Host "Run: tssh   (in a new terminal)"
+
+# Make this PC reachable over SSH inside the tailnet and exchange public keys (asks for UAC once).
+if (-not $NoSetup) {
+    & $python (Join-Path $dest "tssh.py") setup
+}

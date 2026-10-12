@@ -19,6 +19,10 @@
   tssh config [키=값 ...]        전역 설정 보기/변경 (default_user, use_magicdns, update_repo, auto_update_check)
   tssh update [--check]          새 버전 확인/적용
   tssh version                   버전 출력
+
+  tssh setup [--no-server] [--no-keys]   이 컴퓨터를 SSH 서버로 켜고(Tailscale 대역만 허용) 공개키를 교환
+  tssh keys [show|refresh]       내 공개키 보기 / 저장소의 공개키 목록을 받아 authorized_keys 갱신
+  tssh keys publish [--collect]  (관리 PC) 각 컴퓨터의 공개키를 모아 저장소에 게시
 """
 
 from __future__ import annotations
@@ -27,18 +31,25 @@ import difflib
 import getpass
 import json
 import os
+import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.1.4"
+__version__ = "0.2.0"
 
-DEFAULT_REPO = "jekim14/tssh"
+# tssh 는 DeskTools 저장소(jekim14/desktools)의 tools/tssh 에서 관리한다.
+DEFAULT_REPO = "jekim14/desktools"
+DEFAULT_UPDATE_REF = "HEAD"
+DEFAULT_UPDATE_PATH = "tools/tssh/tssh.py"
+DEFAULT_KEYS_PATH = "tools/tssh/authorized_keys"
 CONFIG_DIR = Path.home() / ".tssh"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 STATE_PATH = CONFIG_DIR / "state.json"
@@ -46,7 +57,15 @@ SSH_CONFIG_PATH = Path.home() / ".ssh" / "config"
 MANAGED_BEGIN = "# >>> tssh managed (tssh export 가 생성, 직접 고치지 마세요) >>>"
 MANAGED_END = "# <<< tssh managed <<<"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,253}$")
-SUBCOMMANDS = {"list", "ls", "set", "unset", "resolve", "export", "config", "update", "version", "help", "last"}
+SUBCOMMANDS = {"list", "ls", "set", "unset", "resolve", "export", "config", "update", "version", "help", "last",
+               "setup", "keys"}
+SSH_DIR = Path.home() / ".ssh"
+LOCAL_KEY = SSH_DIR / "id_ed25519"
+AUTHORIZED_KEYS = SSH_DIR / "authorized_keys"
+KEYS_BEGIN = "# >>> tssh keys (tssh setup 이 관리, 직접 고치지 마세요) >>>"
+KEYS_END = "# <<< tssh keys <<<"
+KEY_PREFIXES = ("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-", "sk-ssh-ed25519@", "sk-ecdsa-sha2-")
+MOBILE_OS = {"iOS", "android", "js"}
 
 # ---------------------------------------------------------------- 출력 보조.
 
@@ -253,6 +272,8 @@ def load_peers(status: dict) -> list[dict]:
         hostname = raw.get("HostName") or ""
         name = dns.split(".")[0] if dns else hostname
         if not name or not NAME_RE.match(name):
+            continue
+        if raw.get("OS") == "js":  # Tailscale 웹 SSH 콘솔 같은 임시 노드는 숨긴다.
             continue
         peers.append(
             {
@@ -636,8 +657,8 @@ def managed_block(peers: list[dict], cfg: dict, blocks: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def replace_managed_block(text: str, block: str) -> str:
-    pattern = re.compile(re.escape(MANAGED_BEGIN) + r".*?" + re.escape(MANAGED_END) + r"\n?", re.S)
+def replace_managed_block(text: str, block: str, begin: str = MANAGED_BEGIN, end: str = MANAGED_END) -> str:
+    pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end) + r"\n?", re.S)
     if pattern.search(text):
         return pattern.sub(lambda _: block, text, count=1)
     if text and not text.endswith("\n"):
@@ -679,14 +700,14 @@ def http_get(url: str, timeout: float = 5.0) -> bytes:
         return resp.read()
 
 
-def fetch_latest(repo: str, timeout: float = 5.0) -> tuple[str, str]:
-    """(최신 태그, tssh.py 원문) 을 돌려준다. 실패하면 예외."""
-    data = json.loads(http_get(f"https://api.github.com/repos/{repo}/releases/latest", timeout))
-    tag = data.get("tag_name") or ""
-    if not tag:
-        raise RuntimeError("릴리스 태그를 찾지 못했습니다.")
-    src = http_get(f"https://raw.githubusercontent.com/{repo}/{tag}/tssh.py", timeout).decode("utf-8")
-    return tag, src
+def fetch_latest(repo: str, timeout: float = 5.0, ref: str = DEFAULT_UPDATE_REF,
+                 path: str = DEFAULT_UPDATE_PATH) -> tuple[str, str]:
+    """(참조 이름, tssh.py 원문) 을 돌려준다. DeskTools 저장소 기본 브랜치의 파일을 그대로 받는다. 실패하면 예외."""
+    url = f"https://raw.githubusercontent.com/{repo}/{ref}/{path}"
+    src = http_get(url, timeout).decode("utf-8")
+    if not version_in_source(src):
+        raise RuntimeError(f"받은 파일에 버전이 없습니다: {url}")
+    return ref, src
 
 
 def version_in_source(src: str) -> str:
@@ -707,11 +728,12 @@ def write_self(target: Path, src: str) -> None:
 
 def cmd_update(cfg: dict, check_only: bool) -> int:
     repo = cfg.get("update_repo") or DEFAULT_REPO
-    print(f"저장소 {repo} 에서 최신 릴리스를 확인합니다...")
+    ref = cfg.get("update_ref") or DEFAULT_UPDATE_REF
+    print(f"저장소 {repo} ({ref}) 에서 최신 tssh 를 확인합니다...")
     try:
-        tag, src = fetch_latest(repo, timeout=15)
+        tag, src = fetch_latest(repo, timeout=15, ref=ref)
     except Exception as e:  # noqa: BLE001
-        die(f"릴리스를 가져오지 못했습니다: {e}\n저장소가 아직 없다면 'tssh config update_repo=<owner/repo>' 로 지정하세요.")
+        die(f"최신 파일을 가져오지 못했습니다: {e}\n다른 저장소를 쓴다면 'tssh config update_repo=<owner/repo>' 로 지정하세요.")
     remote = version_in_source(src)
     if not remote:
         die("받은 파일에서 버전을 찾지 못했습니다.")
@@ -750,8 +772,14 @@ def background_update_check(cfg: dict, notice: list[str]) -> threading.Thread | 
     def work() -> None:
         st = load_json(STATE_PATH)
         st["last_update_check"] = datetime.now(timezone.utc).isoformat()
+        if st.get("setup_done"):
+            try:
+                refresh_keys(cfg, quiet=True)
+            except Exception:  # noqa: BLE001
+                pass
         try:
-            tag, src = fetch_latest(cfg.get("update_repo") or DEFAULT_REPO, timeout=4)
+            tag, src = fetch_latest(cfg.get("update_repo") or DEFAULT_REPO, timeout=4,
+                                    ref=cfg.get("update_ref") or DEFAULT_UPDATE_REF)
             remote = version_in_source(src)
             if remote and parse_version(remote) > parse_version(__version__):
                 st["update_available"] = remote
@@ -768,6 +796,355 @@ def background_update_check(cfg: dict, notice: list[str]) -> threading.Thread | 
     t = threading.Thread(target=work, daemon=True)
     t.start()
     return t
+
+
+# ---------------------------------------------------------------- 키 교환과 SSH 서버 설정 (tssh setup / keys).
+
+
+def keys_url(cfg: dict) -> str:
+    repo = cfg.get("update_repo") or DEFAULT_REPO
+    ref = cfg.get("update_ref") or DEFAULT_UPDATE_REF
+    return cfg.get("keys_url") or f"https://raw.githubusercontent.com/{repo}/{ref}/{DEFAULT_KEYS_PATH}"
+
+
+def parse_keys(text: str) -> list[str]:
+    """공개키처럼 보이는 줄만 순서대로, 중복 없이 돌려준다."""
+    out: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith(KEY_PREFIXES) and len(s.split()) >= 2 and s not in out:
+            out.append(s)
+    return out
+
+
+def strip_block(text: str, begin: str, end: str) -> str:
+    return re.sub(re.escape(begin) + r".*?" + re.escape(end) + r"\n?", "", text, count=1, flags=re.S)
+
+
+def keygen_bin() -> str:
+    found = shutil.which("ssh-keygen")
+    if not found and os.name == "nt":
+        cand = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "OpenSSH", "ssh-keygen.exe")
+        if os.path.exists(cand):
+            found = cand
+    if not found:
+        die("ssh-keygen 을 찾지 못했습니다. OpenSSH 클라이언트를 설치하세요.")
+    return found
+
+
+def ensure_local_key() -> str:
+    """~/.ssh/id_ed25519 가 없으면 만들고 공개키 한 줄을 돌려준다."""
+    pub = LOCAL_KEY.with_suffix(".pub")
+    if not LOCAL_KEY.exists():
+        SSH_DIR.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(SSH_DIR, 0o700)
+        comment = f"tssh@{platform.node().split('.')[0]}"
+        subprocess.run(
+            [keygen_bin(), "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(LOCAL_KEY)],
+            check=True, stdin=subprocess.DEVNULL,
+        )
+        print(f"새 SSH 키를 만들었습니다: {LOCAL_KEY}")
+    return pub.read_text(encoding="utf-8").strip()
+
+
+def merge_authorized_keys(existing: str, keys: list[str]) -> tuple[str, int]:
+    """관리 블록에 keys 를 넣은 새 authorized_keys 내용과, 블록에 들어간 키 수를 돌려준다."""
+    outside = set(parse_keys(strip_block(existing, KEYS_BEGIN, KEYS_END)))
+    managed = [k for k in keys if k not in outside]
+    block = "\n".join([KEYS_BEGIN, *managed, KEYS_END]) + "\n"
+    return replace_managed_block(existing, block, KEYS_BEGIN, KEYS_END), len(managed)
+
+
+def install_authorized_keys(keys: list[str]) -> int:
+    try:
+        existing = AUTHORIZED_KEYS.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing = ""
+    new_text, count = merge_authorized_keys(existing, keys)
+    if new_text != existing:
+        SSH_DIR.mkdir(parents=True, exist_ok=True)
+        AUTHORIZED_KEYS.write_text(new_text, encoding="utf-8")
+        if os.name != "nt":
+            os.chmod(SSH_DIR, 0o700)
+            os.chmod(AUTHORIZED_KEYS, 0o600)
+    return count
+
+
+def fetch_remote_keys(cfg: dict, timeout: float = 10.0) -> list[str]:
+    return parse_keys(http_get(keys_url(cfg), timeout).decode("utf-8", "replace"))
+
+
+def refresh_keys(cfg: dict, quiet: bool = False) -> int:
+    """저장소의 공개키 목록을 받아 authorized_keys 관리 블록을 갱신한다. 실패하면 -1."""
+    try:
+        keys = fetch_remote_keys(cfg)
+    except Exception as e:  # noqa: BLE001
+        if not quiet:
+            warn(f"공개키 목록을 받지 못했습니다 ({keys_url(cfg)}): {e}")
+        return -1
+    local = ensure_local_key() if LOCAL_KEY.exists() else ""
+    keys = [k for k in keys if k != local]
+    count = install_authorized_keys(keys)
+    if not quiet:
+        print(f"authorized_keys 관리 블록에 공개키 {count}개를 등록했습니다 ({AUTHORIZED_KEYS}).")
+    return count
+
+
+def port_open(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def is_windows_admin() -> bool:
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+# 관리자 PowerShell 에서 실행되는 Windows SSH 서버 설정. ASCII 만 쓴다.
+WINDOWS_SERVER_SETUP_PS1 = r"""
+$ErrorActionPreference = 'Stop'
+$log = $args[0]
+Start-Transcript -Path $log -Force | Out-Null
+try {
+  $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
+  if ($cap.State -ne 'Installed') { Write-Host "Installing $($cap.Name) ..."; Add-WindowsCapability -Online -Name $cap.Name | Out-Null }
+  Set-Service sshd -StartupType Automatic
+  $conf = Join-Path $env:ProgramData 'ssh\sshd_config'
+  if (-not (Test-Path $conf)) { Start-Service sshd; Start-Sleep -Seconds 2 }
+  if (Test-Path $conf) {
+    $lines = Get-Content $conf
+    $out = foreach ($l in $lines) {
+      if ($l -match '^\s*Match\s+Group\s+administrators' -or $l -match '^\s*AuthorizedKeysFile\s+__PROGRAMDATA__') { "#tssh# $l" } else { $l }
+    }
+    Set-Content -Path $conf -Value $out -Encoding ASCII
+  }
+  New-Item -Path 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null
+  $pwsh = (Get-Command powershell.exe).Source
+  Set-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value $pwsh
+  Get-NetFirewallRule -DisplayName 'OpenSSH*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  Get-NetFirewallRule -Name 'tssh-OpenSSH' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  New-NetFirewallRule -Name 'tssh-OpenSSH' -DisplayName 'OpenSSH Server (Tailscale only, tssh)' -Direction Inbound -Protocol TCP -LocalPort 22 -RemoteAddress @('100.64.0.0/10','fd7a:115c:a1e0::/48') -Action Allow | Out-Null
+  Restart-Service sshd
+  Write-Host 'TSSH_SETUP_OK'
+} catch {
+  Write-Host "TSSH_SETUP_FAIL: $($_.Exception.Message)"
+} finally {
+  Stop-Transcript | Out-Null
+}
+"""
+
+
+def setup_server_windows() -> bool:
+    log = Path(tempfile.gettempdir()) / "tssh-setup.log"
+    script = Path(tempfile.gettempdir()) / "tssh-setup.ps1"
+    script.write_text(WINDOWS_SERVER_SETUP_PS1, encoding="ascii")
+    if log.exists():
+        log.unlink()
+    if is_windows_admin():
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), str(log)])
+    else:
+        print("관리자 권한 확인 창(UAC)이 뜨면 '예'를 누르세요. OpenSSH 서버 설치·방화벽 설정에 필요합니다.")
+        arg = f"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" \"{log}\""
+        subprocess.run([
+            "powershell", "-NoProfile", "-Command",
+            f"Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '{arg}'",
+        ])
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    ok = "TSSH_SETUP_OK" in text
+    if not ok:
+        tail = "\n".join(line for line in text.splitlines() if "TSSH_SETUP_FAIL" in line or "Install" in line)
+        warn("Windows SSH 서버 설정이 끝나지 않았습니다. " + (tail or "UAC 창을 취소했거나 로그가 없습니다.") +
+             f"\n로그: {log}")
+    return ok
+
+
+def setup_server_macos() -> bool:
+    if port_open("127.0.0.1", 22):
+        print("macOS 원격 로그인(SSH)이 이미 켜져 있습니다.")
+        return True
+    if not sys.stdin.isatty():
+        warn("원격 로그인이 꺼져 있습니다. 시스템 설정 → 일반 → 공유 → 원격 로그인을 켜거나 "
+             "터미널에서 'sudo systemsetup -setremotelogin on' 을 실행하세요.")
+        return False
+    print("원격 로그인을 켭니다. 관리자 비밀번호를 물을 수 있습니다.")
+    r = subprocess.run(["sudo", "systemsetup", "-setremotelogin", "on"])
+    return r.returncode == 0 and port_open("127.0.0.1", 22, 3.0)
+
+
+def setup_server_linux() -> bool:
+    exe = tailscale_candidates()
+    if exe:
+        print("Tailscale SSH 를 켭니다 (tailscale set --ssh). 관리자 비밀번호를 물을 수 있습니다.")
+        cmd = [exe[0], "set", "--ssh"]
+        if os.geteuid() != 0:  # type: ignore[attr-defined]
+            if not shutil.which("sudo"):
+                warn("sudo 가 없어 Tailscale SSH 를 켜지 못했습니다. root 로 'tailscale set --ssh' 를 실행하세요.")
+                return False
+            cmd = ["sudo"] + (["-n"] if not sys.stdin.isatty() else []) + cmd
+        r = subprocess.run(cmd)
+        if r.returncode == 0:
+            print("Tailscale SSH 가 켜졌습니다. 접근 권한은 Tailscale 관리 콘솔의 SSH 정책을 따릅니다.")
+            return True
+        warn("Tailscale SSH 를 켜지 못했습니다. 아래 OpenSSH 서버 설치로 넘어갑니다.")
+    if port_open("127.0.0.1", 22):
+        print("OpenSSH 서버가 이미 실행 중입니다.")
+        return True
+    if not sys.stdin.isatty():
+        warn("OpenSSH 서버가 없습니다. 'sudo apt install openssh-server' 또는 'sudo dnf install openssh-server' 를 실행하세요.")
+        return False
+    if shutil.which("apt-get"):
+        cmds = [["sudo", "apt-get", "install", "-y", "openssh-server"], ["sudo", "systemctl", "enable", "--now", "ssh"]]
+    elif shutil.which("dnf"):
+        cmds = [["sudo", "dnf", "install", "-y", "openssh-server"], ["sudo", "systemctl", "enable", "--now", "sshd"]]
+    else:
+        warn("패키지 관리자를 몰라 OpenSSH 서버를 설치하지 못했습니다.")
+        return False
+    for cmd in cmds:
+        if subprocess.run(cmd).returncode != 0:
+            warn(f"실패: {' '.join(cmd)}")
+            return False
+    return port_open("127.0.0.1", 22, 3.0)
+
+
+def cmd_setup(cfg: dict, args: list[str]) -> int:
+    """이 컴퓨터를 tailnet 안에서 SSH 로 들어올 수 있게 만들고 공개키를 교환한다."""
+    no_server = "--no-server" in args
+    no_keys = "--no-keys" in args
+    print(c("tssh setup: 이 컴퓨터를 SSH 로 묶습니다.", "1"))
+    pub = ensure_local_key()
+    print(f"이 컴퓨터의 공개키: {pub[:40]}...")
+    if not no_keys:
+        refresh_keys(cfg)
+    ok = True
+    if not no_server:
+        system = platform.system()
+        if system == "Windows":
+            ok = setup_server_windows()
+        elif system == "Darwin":
+            ok = setup_server_macos()
+        elif system == "Linux":
+            ok = setup_server_linux()
+        else:
+            warn(f"{system} 에서는 SSH 서버 자동 설정을 지원하지 않습니다.")
+            ok = False
+    state = load_json(STATE_PATH)
+    state["setup_done"] = datetime.now(timezone.utc).isoformat()
+    state["server_ok"] = ok
+    save_json(STATE_PATH, state)
+    if ok:
+        print(c("완료. 이제 다른 기기에서 'tssh <이 컴퓨터 이름>' 으로 들어올 수 있습니다.", "32"))
+        print("이 컴퓨터의 공개키를 저장소 목록에 올리려면 관리 PC 에서 'tssh keys publish --collect' 를 실행하세요.")
+    return 0 if ok else 1
+
+
+def remote_pubkey_command(peer: dict) -> str:
+    if peer["os"] == "windows":
+        return 'powershell -NoProfile -Command "Get-Content $env:USERPROFILE\\.ssh\\id_ed25519.pub"'
+    return "cat ~/.ssh/id_ed25519.pub"
+
+
+def collect_keys(peers: list[dict], cfg: dict, blocks: list[dict]) -> list[tuple[str, str]]:
+    """SSH 로 들어갈 수 있는 컴퓨터마다 공개키를 가져온다."""
+    found: list[tuple[str, str]] = []
+    ssh = ssh_bin()
+    for p in peers:
+        if not p["online"] or p["os"] in MOBILE_OS or not p["ip"]:
+            continue
+        if not port_open(p["ip"], 22):
+            print(f"  {p['name']}: SSH 포트 닫힘, 건너뜀")
+            continue
+        settings = host_settings(p, cfg, blocks)
+        extra = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new"]
+        cmd = build_ssh_cmd(p, settings, cfg, extra, ssh_path=ssh)
+        cmd.append(remote_pubkey_command(p))
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        except subprocess.TimeoutExpired:
+            print(f"  {p['name']}: 응답 없음")
+            continue
+        keys = parse_keys(r.stdout)
+        if r.returncode != 0 or not keys:
+            reason = (r.stderr or "").strip().splitlines()[-1:] or ["공개키 없음 (tssh setup 미실행)"]
+            print(f"  {p['name']}: 실패 - {reason[0]}")
+            continue
+        found.append((p["name"], keys[0]))
+        print(f"  {p['name']}: {keys[0][:40]}...")
+    return found
+
+
+def repo_dir(cfg: dict) -> Path:
+    """DeskTools 저장소 복제본의 루트. 설정값, 이 파일의 위치(tools/tssh/tssh.py) 순으로 찾는다."""
+    d = cfg.get("repo_dir")
+    if d and (Path(d) / ".git").exists():
+        return Path(d)
+    here = Path(__file__).resolve()
+    for cand in (here.parent, here.parents[2] if len(here.parents) > 2 else here.parent):
+        if (cand / ".git").exists():
+            return cand
+    die("저장소 복제본 위치를 모릅니다. 'tssh config repo_dir=<desktools 클론 경로>' 로 지정하세요.")
+
+
+def keys_file(cfg: dict) -> Path:
+    """저장소 안의 공개키 목록 파일 경로."""
+    rd = repo_dir(cfg)
+    nested = rd / DEFAULT_KEYS_PATH
+    return nested if nested.parent.is_dir() else rd / "authorized_keys"
+
+
+def cmd_keys(peers_loader, cfg: dict, args: list[str]) -> int:
+    sub = args[0] if args else "show"
+    if sub == "show":
+        print(ensure_local_key())
+        return 0
+    if sub == "refresh":
+        return 0 if refresh_keys(cfg) >= 0 else 1
+    if sub in ("collect", "publish"):
+        rd = repo_dir(cfg)
+        target = keys_file(cfg)
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        entries: dict[str, str] = {}
+        for line in existing.splitlines():
+            s = line.strip()
+            if s.startswith(KEY_PREFIXES):
+                entries[s] = s
+        local = ensure_local_key()
+        entries[local] = local
+        if sub == "collect" or "--collect" in args:
+            peers, blocks = peers_loader()
+            print("각 컴퓨터에서 공개키를 모읍니다...")
+            for name, key in collect_keys(peers, cfg, blocks):
+                entries[key] = key
+        header = "# tssh 가 관리하는 tailnet 공개키 목록. 각 기기의 'tssh setup' / 'tssh keys refresh' 가 이 파일을 받아 authorized_keys 에 넣는다.\n"
+        text = header + "\n".join(entries) + "\n"
+        changed = text != existing
+        target.write_text(text, encoding="utf-8")
+        print(f"{target}: 공개키 {len(entries)}개")
+        if sub == "publish":
+            if not changed:
+                print("바뀐 내용이 없습니다.")
+                return 0
+            rel = str(target.relative_to(rd)).replace("\\", "/")
+            cmds = [["git", "add", rel],
+                    ["git", "commit", "-q", "-m", "keys: tailnet 공개키 목록 갱신"],
+                    ["git", "push", "-q"]]
+            for cmd in cmds:
+                r = subprocess.run(cmd, cwd=rd)
+                if r.returncode != 0:
+                    die(f"실패: {' '.join(cmd)}")
+            print(f"게시했습니다. 각 기기는 하루 안에 자동으로 받거나 'tssh keys refresh' 로 바로 받습니다.\n{keys_url(cfg)}")
+        return 0
+    die("사용법: tssh keys [show|refresh|collect|publish [--collect]]")
 
 
 # ---------------------------------------------------------------- 하위 명령.
@@ -831,7 +1208,7 @@ def cmd_config(cfg: dict, args: list[str]) -> None:
     for k, v in kv.items():
         if k in bools:
             cfg[k] = v.lower() in ("1", "true", "yes", "on", "y")
-        elif k in ("default_user", "update_repo"):
+        elif k in ("default_user", "update_repo", "update_ref", "repo_dir", "keys_url"):
             if v:
                 cfg[k] = v
             else:
@@ -843,7 +1220,8 @@ def cmd_config(cfg: dict, args: list[str]) -> None:
             else:
                 cfg.get("ssh_options", {}).pop(opt, None)
         else:
-            die(f"알 수 없는 설정 키: {k} (가능: default_user, use_magicdns, update_repo, auto_update_check, ssh_options.<옵션>)")
+            die(f"알 수 없는 설정 키: {k} (가능: default_user, use_magicdns, update_repo, update_ref, auto_update_check, "
+                "repo_dir, keys_url, ssh_options.<옵션>)")
     save_json(CONFIG_PATH, cfg)
     print(json.dumps(cfg, ensure_ascii=False, indent=2))
 
@@ -920,6 +1298,10 @@ def main(argv: list[str] | None = None) -> int:
     if sub == "config":
         cmd_config(cfg, argv[1:])
         return 0
+    if sub == "setup":
+        return cmd_setup(cfg, argv[1:])
+    if sub == "keys":
+        return cmd_keys(lambda: (load_peers(tailscale_status()), ssh_config_blocks()), cfg, argv[1:])
 
     status = tailscale_status()
     peers = load_peers(status)

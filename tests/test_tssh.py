@@ -197,6 +197,37 @@ class PeerTests(unittest.TestCase):
             if os.name != "nt":
                 self.assertTrue(target.stat().st_mode & stat.S_IXUSR, "실행 권한이 유지되어야 한다")
 
+    def test_parse_keys_and_merge_authorized_keys(self):
+        text = "# comment\nssh-ed25519 AAAA1 a@x\n\nssh-rsa BBBB b@y\nnot a key\nssh-ed25519 AAAA1 a@x\n"
+        self.assertEqual(tssh.parse_keys(text), ["ssh-ed25519 AAAA1 a@x", "ssh-rsa BBBB b@y"])
+        existing = "ssh-ed25519 OLD old@host\n"
+        merged, count = tssh.merge_authorized_keys(existing, ["ssh-ed25519 AAAA1 a@x", "ssh-ed25519 OLD old@host"])
+        self.assertEqual(count, 1)  # 블록 밖에 이미 있는 키는 블록에 넣지 않는다.
+        self.assertTrue(merged.startswith(existing))
+        self.assertIn(tssh.KEYS_BEGIN + "\nssh-ed25519 AAAA1 a@x\n" + tssh.KEYS_END, merged)
+        merged2, count2 = tssh.merge_authorized_keys(merged, ["ssh-rsa BBBB b@y"])
+        self.assertEqual(count2, 1)
+        self.assertNotIn("AAAA1", merged2)
+        self.assertEqual(merged2.count(tssh.KEYS_BEGIN), 1)
+        self.assertIn("ssh-ed25519 OLD old@host", merged2)
+        empty, c0 = tssh.merge_authorized_keys("", [])
+        self.assertEqual((empty, c0), (tssh.KEYS_BEGIN + "\n" + tssh.KEYS_END + "\n", 0))
+
+    def test_remote_pubkey_command_and_mobile_filter(self):
+        self.assertEqual(tssh.remote_pubkey_command({"os": "linux"}), "cat ~/.ssh/id_ed25519.pub")
+        self.assertIn("powershell", tssh.remote_pubkey_command({"os": "windows"}))
+        status = {"Peer": {"x": {"HostName": "console", "DNSName": "tailscale-ssh-console-abc.example.ts.net.",
+                                 "TailscaleIPs": ["100.9.9.9"], "OS": "js", "Online": True}}}
+        self.assertEqual(tssh.load_peers(status), [])
+
+    def test_keys_url_default(self):
+        self.assertEqual(tssh.keys_url({"update_repo": "a/b"}),
+                         "https://raw.githubusercontent.com/a/b/HEAD/tools/tssh/authorized_keys")
+        self.assertEqual(tssh.keys_url({"update_repo": "a/b", "update_ref": "v1"}),
+                         "https://raw.githubusercontent.com/a/b/v1/tools/tssh/authorized_keys")
+        self.assertEqual(tssh.DEFAULT_REPO, "jekim14/desktools")
+        self.assertEqual(tssh.keys_url({"keys_url": "https://x/y"}), "https://x/y")
+
     def test_version_helpers(self):
         self.assertEqual(tssh.parse_version("v1.2.10"), (1, 2, 10))
         self.assertGreater(tssh.parse_version("0.2.0"), tssh.parse_version("0.1.9"))

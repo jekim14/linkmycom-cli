@@ -1,9 +1,10 @@
 #!/usr/bin/env sh
-# tssh 를 ~/.local/bin 에 설치하는 macOS/Linux 설치 스크립트.
-# 원격 한 줄 설치 (tssh.py 가 옆에 없으면 최신 릴리스에서 내려받는다):
-#   curl -fsSL https://github.com/jekim14/tssh/releases/latest/download/install.sh | sh
+# tssh(DeskTools 의 SSH 접속기)를 ~/.local/bin 에 설치하는 macOS/Linux 설치 스크립트.
+# 원격 한 줄 설치 (tssh.py 가 옆에 없으면 DeskTools 저장소에서 내려받는다):
+#   curl -fsSL https://raw.githubusercontent.com/jekim14/desktools/HEAD/tools/tssh/install.sh | sh
 set -eu
-repo="${TSSH_REPO:-jekim14/tssh}"
+repo="${TSSH_REPO:-jekim14/desktools}"
+ref="${TSSH_REF:-HEAD}"
 dest="${TSSH_BIN_DIR:-$HOME/.local/bin}"
 if ! command -v python3 >/dev/null 2>&1; then
     echo "python3 가 필요합니다." >&2
@@ -17,7 +18,7 @@ tmp=""
 if [ -n "$here" ] && [ -f "$here/tssh.py" ]; then
     src="$here/tssh.py"
 else
-    url="https://github.com/$repo/releases/latest/download/tssh.py"
+    url="https://raw.githubusercontent.com/$repo/$ref/tools/tssh/tssh.py"
     tmp="$(mktemp "${TMPDIR:-/tmp}/tssh.XXXXXX")"
     echo "tssh.py 를 내려받습니다: $url"
     if command -v curl >/dev/null 2>&1; then
@@ -39,3 +40,13 @@ case ":$PATH:" in
     *) echo "주의: $dest 가 PATH 에 없습니다. 셸 설정에 'export PATH=\"$dest:\$PATH\"' 를 추가하세요." ;;
 esac
 echo "설치 완료: $("$dest/tssh" version) → $dest/tssh"
+# 이 컴퓨터를 tailnet 안에서 SSH 로 들어올 수 있게 하고 공개키를 교환한다. 건너뛰려면 TSSH_NO_SETUP=1.
+if [ -z "${TSSH_NO_SETUP:-}" ]; then
+    if [ -t 0 ]; then
+        "$dest/tssh" setup
+    elif [ -r /dev/tty ]; then
+        "$dest/tssh" setup < /dev/tty
+    else
+        "$dest/tssh" setup
+    fi
+fi

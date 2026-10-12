@@ -1,5 +1,7 @@
 # tssh - Tailscale SSH 접속기
 
+> **이 저장소는 [jekim14/desktools](https://github.com/jekim14/desktools)의 `tools/tssh`로 옮겨졌습니다 (2026-10-12).** DeskTools 컨트롤 타워의 `SSH 터미널` 버튼이 이 도구를 호출하며, 명령줄 설치와 최신 사용법은 [tools/tssh/README.md](https://github.com/jekim14/desktools/blob/main/tools/tssh/README.md)를 보세요. 여기의 0.2.0 릴리스는 기존 설치본이 `tssh update`로 DeskTools 저장소를 바라보게 하는 마지막 릴리스입니다. 아래 설명은 0.1.x 기준입니다.
+
 Tailscale 네트워크(tailnet)에 있는 내 기기 목록을 보여 주고, 번호나 이름 일부만 입력해 바로 SSH로 접속하는 명령줄 도구입니다. Python 3.10 이상과 Tailscale, OpenSSH `ssh` 만 있으면 되고 추가 패키지는 없습니다. Windows, macOS, Linux에서 같은 파일 하나로 동작합니다.
 
 ```
@@ -53,6 +55,20 @@ SSH 서버가 켜져 있는 기기라면 다른 기기에서 `tssh <이름> "cur
 | `tssh export` | `~/.ssh/config` 에 tssh 관리 블록을 써서 일반 `ssh pfl` 로도 접속되게 함. 기존 내용은 보존하고 `config.bak-tssh` 로 백업합니다. |
 | `tssh config` | 전역 설정 보기. `tssh config default_user=ubuntu use_magicdns=true` 처럼 변경. |
 | `tssh update` | 새 릴리스가 있으면 자신을 교체. `--check` 는 확인만. |
+
+### SSH 서버와 키 자동 설정 (`tssh setup`)
+
+설치 스크립트는 마지막에 `tssh setup`을 실행해 그 컴퓨터를 tailnet 안에서 SSH로 들어올 수 있게 만듭니다. 건너뛰려면 Windows는 `-NoSetup`, macOS/Linux는 `TSSH_NO_SETUP=1`을 붙입니다. 나중에 `tssh setup`을 다시 실행해도 됩니다.
+
+| OS | 하는 일 |
+|---|---|
+| Windows | 관리자 권한(UAC) 확인 뒤 OpenSSH 서버 설치, 서비스 자동 시작, 방화벽을 Tailscale 대역(100.64.0.0/10, fd7a:115c:a1e0::/48)만 허용, 관리자 계정도 `~/.ssh/authorized_keys`를 쓰도록 `sshd_config` 수정, 기본 셸을 PowerShell로 지정. |
+| macOS | 원격 로그인이 꺼져 있으면 `sudo systemsetup -setremotelogin on`. |
+| Linux | `sudo tailscale set --ssh`로 Tailscale SSH를 켭니다(접근 권한은 Tailscale 관리 콘솔의 SSH 정책). 실패하면 `openssh-server`를 설치합니다. |
+
+공통으로 `~/.ssh/id_ed25519` 키가 없으면 만들고, 저장소의 [authorized_keys](authorized_keys) 목록을 받아 `~/.ssh/authorized_keys`의 관리 블록에 넣습니다. 그 뒤로는 하루 한 번 자동으로 목록을 다시 받습니다. 바로 받으려면 `tssh keys refresh`.
+
+목록에 공개키를 올리는 쪽은 관리 PC입니다. `tssh keys publish --collect`가 SSH로 들어갈 수 있는 컴퓨터마다 공개키를 모아 저장소에 커밋·푸시합니다(저장소 복제본이 필요하며 `tssh config repo_dir=<경로>`로 지정). 공개키는 공개돼도 안전하고, 목록을 바꿀 수 있는 사람은 저장소 주인뿐이므로 신뢰의 근거는 GitHub 계정입니다. 저장소 주인이 아닌 사람이 쓰려면 `tssh config keys_url=<자기 목록 주소>`로 바꾸세요.
 
 ### 사용자 이름이 정해지는 순서
 

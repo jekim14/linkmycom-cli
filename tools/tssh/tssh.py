@@ -43,7 +43,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 # tssh 는 DeskTools 저장소(jekim14/desktools, 비공개)의 tools/tssh 에서 개발하고, 공개 거울 저장소 jekim14/tssh 의
 # 같은 경로로 배포한다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -931,8 +931,29 @@ $ErrorActionPreference = 'Stop'
 $log = $args[0]
 Start-Transcript -Path $log -Force | Out-Null
 try {
-  $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
-  if ($cap.State -ne 'Installed') { Write-Host "Installing $($cap.Name) ..."; Add-WindowsCapability -Online -Name $cap.Name | Out-Null }
+  if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+    $installed = $false
+    try {
+      $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
+      if ($cap -and $cap.State -ne 'Installed') { Write-Host "Installing $($cap.Name) ..."; Add-WindowsCapability -Online -Name $cap.Name | Out-Null }
+      $installed = [bool](Get-Service sshd -ErrorAction SilentlyContinue)
+    } catch { Write-Host "Windows optional feature install failed: $($_.Exception.Message)" }
+    if (-not $installed) {
+      Write-Host 'Falling back to the signed Win32-OpenSSH MSI from github.com/PowerShell/Win32-OpenSSH.'
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      $rel = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/PowerShell/Win32-OpenSSH/releases/latest' -Headers @{ 'User-Agent' = 'tssh' }
+      $asset = $rel.assets | Where-Object { $_.name -match '^OpenSSH-Win64-v.*\.msi$' } | Select-Object -First 1
+      if (-not $asset) { throw 'Win32-OpenSSH MSI asset not found in the latest release.' }
+      $msi = Join-Path $env:TEMP $asset.name
+      Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $msi
+      $sig = Get-AuthenticodeSignature -LiteralPath $msi
+      if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw "MSI signature check failed: $($sig.Status) $($sig.SignerCertificate.Subject)" }
+      Write-Host "Installing $($asset.name) ..."
+      $p = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart', 'ADDLOCAL=Server') -Wait -PassThru
+      if ($p.ExitCode -notin @(0,3010)) { throw "MSI install failed: exit code $($p.ExitCode)" }
+      if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) { throw 'sshd service is missing after the MSI install.' }
+    }
+  }
   Set-Service sshd -StartupType Automatic
   $conf = Join-Path $env:ProgramData 'ssh\sshd_config'
   if (-not (Test-Path $conf)) { Start-Service sshd; Start-Sleep -Seconds 2 }

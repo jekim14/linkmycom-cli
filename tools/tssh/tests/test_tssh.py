@@ -240,6 +240,27 @@ class PeerTests(unittest.TestCase):
         self.assertEqual(kept, {"update_repo": "someone/else"})
         self.assertEqual(tssh.keys_url({"keys_url": "https://x/y"}), "https://x/y")
 
+    def test_repo_file_urls_prefer_api(self):
+        urls = tssh.repo_file_urls("a/b", "HEAD", "tools/tssh/authorized_keys")
+        self.assertEqual(urls[0][0], "https://api.github.com/repos/a/b/contents/tools/tssh/authorized_keys?ref=HEAD")
+        self.assertEqual(urls[0][1], {"Accept": "application/vnd.github.raw"})
+        self.assertEqual(urls[1][0], "https://raw.githubusercontent.com/a/b/HEAD/tools/tssh/authorized_keys")
+
+    def test_fetch_repo_file_falls_back(self):
+        calls = []
+        original = tssh.http_get
+        def fake(url, timeout=5.0, headers=None):
+            calls.append(url)
+            if "api.github.com" in url:
+                raise OSError("rate limited")
+            return b"ok"
+        tssh.http_get = fake
+        try:
+            self.assertEqual(tssh.fetch_repo_file("a/b", "HEAD", "x"), b"ok")
+        finally:
+            tssh.http_get = original
+        self.assertEqual(len(calls), 2)
+
     def test_version_helpers(self):
         self.assertEqual(tssh.parse_version("v1.2.10"), (1, 2, 10))
         self.assertGreater(tssh.parse_version("0.2.0"), tssh.parse_version("0.1.9"))

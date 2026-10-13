@@ -43,7 +43,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 # tssh 는 DeskTools 저장소(jekim14/desktools, 비공개)의 tools/tssh 에서 개발하고, 공개 거울 저장소 jekim14/tssh 의
 # 같은 경로로 배포한다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -711,19 +711,37 @@ def parse_version(v: str) -> tuple[int, ...]:
     return tuple(int(n) for n in nums) or (0,)
 
 
-def http_get(url: str, timeout: float = 5.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": f"tssh/{__version__}", "Accept": "*/*"})
+def http_get(url: str, timeout: float = 5.0, headers: dict | None = None) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": f"tssh/{__version__}", "Accept": "*/*", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 
+def repo_file_urls(repo: str, ref: str, path: str) -> list[tuple[str, dict]]:
+    """저장소 파일을 받을 주소 목록. raw.githubusercontent 는 몇 분간 옛 내용을 주므로 캐시 없는 API 를 먼저 쓴다."""
+    return [
+        (f"https://api.github.com/repos/{repo}/contents/{path}?ref={ref}", {"Accept": "application/vnd.github.raw"}),
+        (f"https://raw.githubusercontent.com/{repo}/{ref}/{path}", {}),
+    ]
+
+
+def fetch_repo_file(repo: str, ref: str, path: str, timeout: float = 5.0) -> bytes:
+    """API → raw 순서로 시도해 처음 성공한 내용을 돌려준다. 모두 실패하면 마지막 예외를 다시 올린다."""
+    last: Exception | None = None
+    for url, headers in repo_file_urls(repo, ref, path):
+        try:
+            return http_get(url, timeout, headers)
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise last if last else RuntimeError("받을 주소가 없습니다.")
+
+
 def fetch_latest(repo: str, timeout: float = 5.0, ref: str = DEFAULT_UPDATE_REF,
                  path: str = DEFAULT_UPDATE_PATH) -> tuple[str, str]:
-    """(참조 이름, tssh.py 원문) 을 돌려준다. DeskTools 저장소 기본 브랜치의 파일을 그대로 받는다. 실패하면 예외."""
-    url = f"https://raw.githubusercontent.com/{repo}/{ref}/{path}"
-    src = http_get(url, timeout).decode("utf-8")
+    """(참조 이름, tssh.py 원문) 을 돌려준다. 배포 저장소 기본 브랜치의 파일을 그대로 받는다. 실패하면 예외."""
+    src = fetch_repo_file(repo, ref, path, timeout).decode("utf-8")
     if not version_in_source(src):
-        raise RuntimeError(f"받은 파일에 버전이 없습니다: {url}")
+        raise RuntimeError(f"받은 파일에 버전이 없습니다: {repo}/{ref}/{path}")
     return ref, src
 
 
@@ -889,7 +907,12 @@ def install_authorized_keys(keys: list[str]) -> int:
 
 
 def fetch_remote_keys(cfg: dict, timeout: float = 10.0) -> list[str]:
-    return parse_keys(http_get(keys_url(cfg), timeout).decode("utf-8", "replace"))
+    if cfg.get("keys_url"):
+        data = http_get(cfg["keys_url"], timeout)
+    else:
+        data = fetch_repo_file(cfg.get("update_repo") or DEFAULT_REPO, cfg.get("update_ref") or DEFAULT_UPDATE_REF,
+                               DEFAULT_KEYS_PATH, timeout)
+    return parse_keys(data.decode("utf-8", "replace"))
 
 
 def refresh_keys(cfg: dict, quiet: bool = False) -> int:

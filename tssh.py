@@ -23,6 +23,12 @@
   tssh setup [--no-server] [--no-keys]   이 컴퓨터를 SSH 서버로 켜고(Tailscale 대역만 허용) 공개키를 교환
   tssh keys [show|refresh]       내 공개키 보기 / 저장소의 공개키 목록을 받아 authorized_keys 갱신
   tssh keys publish [--collect]  (관리 PC) 각 컴퓨터의 공개키를 모아 저장소에 게시
+
+  tssh screen <이름>             DeskTools 로 그 PC 화면 보기 창을 연다
+  tssh display <이름|self> [list|gather|single|extend] [--minutes N]
+                                 여러 모니터 PC 정리: 모니터 목록, 모든 창을 주 모니터로 모으기,
+                                 주 모니터만 쓰기(N분 뒤 자동 복원, 기본 180), 원래대로 복원
+  tssh password                  DeskTools 영구 비밀번호를 내 모든 PC 에 한 번에 설정(직접 입력)
 """
 
 from __future__ import annotations
@@ -43,7 +49,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.2.4"
+__version__ = "0.3.0"
 
 # tssh 는 DeskTools 저장소(jekim14/desktools, 비공개)의 tools/tssh 에서 개발하고, 공개 거울 저장소 jekim14/tssh 의
 # 같은 경로로 배포한다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -61,7 +67,7 @@ MANAGED_BEGIN = "# >>> tssh managed (tssh export 가 생성, 직접 고치지 �
 MANAGED_END = "# <<< tssh managed <<<"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,253}$")
 SUBCOMMANDS = {"list", "ls", "set", "unset", "resolve", "export", "config", "update", "version", "help", "last",
-               "setup", "keys"}
+               "setup", "keys", "display", "screen", "password"}
 SSH_DIR = Path.home() / ".ssh"
 LOCAL_KEY = SSH_DIR / "id_ed25519"
 AUTHORIZED_KEYS = SSH_DIR / "authorized_keys"
@@ -1208,6 +1214,138 @@ def cmd_keys(peers_loader, cfg: dict, args: list[str]) -> int:
     die("사용법: tssh keys [show|refresh|collect|publish [--collect]]")
 
 
+# ---------------------------------------------------------------- 화면 보기와 여러 모니터 도우미 (screen / display / password).
+
+DISPLAY_ACTIONS = ("list", "gather", "single", "extend")
+REMOTE_DISPLAY_SCRIPT = r"C:\Program Files\DeskTools\DeskTools-Display.ps1"
+
+
+def display_remote_ps(action: str, minutes: int) -> str:
+    """원격 Windows 의 로그인 사용자 데스크톱에서 DeskTools-Display.ps1 을 실행하고 결과를 출력하는 PowerShell."""
+    if action not in DISPLAY_ACTIONS:
+        raise ValueError(action)
+    minutes = max(5, min(int(minutes), 24 * 60))
+    lines = [
+        "$ErrorActionPreference = 'Stop'",
+        f"$script = '{REMOTE_DISPLAY_SCRIPT}'",
+        "if (-not (Test-Path $script)) { 'DeskTools-Display.ps1 is not installed on this PC (run Install-NativeHost).'; exit 2 }",
+        "$user = (Get-CimInstance Win32_ComputerSystem).UserName",
+        "if (-not $user) { 'Nobody is signed in on this PC.'; exit 3 }",
+        "$dir = Join-Path $env:ProgramData 'DeskTools'; New-Item -ItemType Directory -Force -Path $dir | Out-Null",
+        "$out = Join-Path $dir ('display-' + [guid]::NewGuid().ToString('N') + '.txt')",
+        f"$arg = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"' + $script + '\" -Action {action} "
+        f"-RestoreMinutes {minutes} -Out \"' + $out + '\"'",
+        "$act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg",
+        "$pr = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest",
+        "$name = 'DeskTools-Display-' + [guid]::NewGuid().ToString('N').Substring(0, 8)",
+        "Register-ScheduledTask -TaskName $name -Action $act -Principal $pr -Force | Out-Null",
+        "Start-ScheduledTask -TaskName $name",
+        "$deadline = (Get-Date).AddSeconds(60)",
+        "while ((Get-Date) -lt $deadline -and -not (Test-Path $out)) { Start-Sleep -Milliseconds 500 }",
+        "Unregister-ScheduledTask -TaskName $name -Confirm:$false",
+        "if (Test-Path $out) { Get-Content $out -Encoding UTF8; Remove-Item $out } else { 'No result within 60 s.'; exit 4 }",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def encode_ps(script: str) -> str:
+    import base64
+
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
+def find_local_file(*candidates) -> str | None:
+    for cand in candidates:
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
+def desktools_exe() -> str | None:
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    local = os.environ.get("LOCALAPPDATA", "")
+    portable = None
+    cur = os.path.join(local, "DeskToolsNative", "current.json")
+    if local and os.path.exists(cur):
+        try:
+            with open(cur, encoding="utf-8") as f:
+                ver = json.load(f).get("version", "")
+            portable = os.path.join(local, "DeskToolsNative", "versions", ver, "desktools.exe")
+        except (OSError, ValueError):
+            portable = None
+    return find_local_file(os.path.join(pf, "DeskTools", "desktools.exe"), portable,
+                           os.path.join(pf, "RustDesk", "rustdesk.exe"),
+                           "/Applications/RustDesk.app/Contents/MacOS/RustDesk")
+
+
+def parse_minutes(args: list[str], default: int = 180) -> tuple[list[str], int]:
+    rest, minutes, i = [], default, 0
+    while i < len(args):
+        if args[i] in ("--minutes", "-m") and i + 1 < len(args):
+            try:
+                minutes = int(args[i + 1])
+            except ValueError:
+                die(f"--minutes 에는 숫자를 쓰세요: {args[i + 1]}")
+            i += 2
+            continue
+        rest.append(args[i])
+        i += 1
+    return rest, minutes
+
+
+def cmd_display(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -> int:
+    args, minutes = parse_minutes(args)
+    if not args:
+        die("사용법: tssh display <이름|self> [list|gather|single|extend] [--minutes N]")
+    action = args[1] if len(args) > 1 else "list"
+    if action not in DISPLAY_ACTIONS:
+        die(f"알 수 없는 동작 {action}. 가능: {', '.join(DISPLAY_ACTIONS)}")
+    if args[0] in ("self", "local", "."):
+        if os.name != "nt":
+            die("display 는 Windows PC 에서만 씁니다.")
+        script = find_local_file(REMOTE_DISPLAY_SCRIPT, str(Path(__file__).with_name("DeskTools-Display.ps1")))
+        if not script:
+            die("DeskTools-Display.ps1 을 찾지 못했습니다.")
+        return subprocess.call(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
+                                "-Action", action, "-RestoreMinutes", str(minutes)])
+    peer = pick_one_or_die(peers, cfg, blocks, args[0])
+    if peer["os"] != "windows":
+        die(f"{peer['name']} 은(는) Windows 가 아닙니다. display 는 Windows PC 에서만 씁니다.")
+    settings = host_settings(peer, cfg, blocks)
+    cmd = build_ssh_cmd(peer, settings, cfg, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"], ssh_path=ssh_bin())
+    cmd.append("powershell -NoProfile -EncodedCommand " + encode_ps(display_remote_ps(action, minutes)))
+    print(c(f"→ {peer['name']} display {action}", "36"))
+    return subprocess.call(cmd)
+
+
+def cmd_screen(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -> int:
+    if not args:
+        die("사용법: tssh screen <이름>")
+    peer = pick_one_or_die(peers, cfg, blocks, args[0])
+    exe = desktools_exe()
+    if not exe:
+        die("DeskTools(또는 RustDesk) 실행 파일을 찾지 못했습니다. DeskTools 설치기를 먼저 실행하세요.")
+    if not peer["online"]:
+        warn(f"{peer['name']} 은(는) 오프라인으로 표시됩니다.")
+    print(c(f"→ 화면 보기 {peer['name']} ({peer['ip']})", "36") + f"  {exe}")
+    kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    subprocess.Popen([exe, "--connect", peer["ip"]], **kwargs)
+    return 0
+
+
+def cmd_password() -> int:
+    if os.name != "nt":
+        die("password 는 Windows PC 에서 실행하세요(Mac 도 함께 설정합니다).")
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    script = find_local_file(os.path.join(pf, "DeskTools", "Set-DeskToolsPassword.ps1"),
+                             str(Path(__file__).with_name("Set-DeskToolsPassword.ps1")))
+    if not script:
+        die("Set-DeskToolsPassword.ps1 을 찾지 못했습니다.")
+    return subprocess.call(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script])
+
+
 # ---------------------------------------------------------------- 하위 명령.
 
 
@@ -1361,6 +1499,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if sub == "setup":
         return cmd_setup(cfg, argv[1:])
+    if sub == "password":
+        return cmd_password()
     if sub == "keys":
         return cmd_keys(lambda: (load_peers(tailscale_status()), ssh_config_blocks()), cfg, argv[1:])
 
@@ -1380,6 +1520,10 @@ def main(argv: list[str] | None = None) -> int:
     if sub == "export":
         cmd_export(peers, cfg, blocks)
         return 0
+    if sub == "display":
+        return cmd_display(peers, cfg, blocks, argv[1:])
+    if sub == "screen":
+        return cmd_screen(peers, cfg, blocks, argv[1:])
     if sub == "resolve":
         if len(argv) < 2:
             die("사용법: tssh resolve <이름>")

@@ -24,7 +24,8 @@
   tssh keys [show|refresh]       내 공개키 보기 / 저장소의 공개키 목록을 받아 authorized_keys 갱신
   tssh keys publish [--collect]  (관리 PC) 각 컴퓨터의 공개키를 모아 저장소에 게시
 
-  tssh screen <이름>             DeskTools 로 그 PC 화면 보기 창을 연다
+  tssh screen <이름> [--gather]  DeskTools 로 그 PC 화면 보기 창을 연다(--gather: 먼저 그 PC 의 창을 주 모니터로 모음)
+                                 tssh set <이름> screen=<다른 이름> 으로 화면용 접속 대상을 따로 지정
   tssh display <이름|self> [list|gather|single|extend] [--minutes N]
                                  여러 모니터 PC 정리: 모니터 목록, 모든 창을 주 모니터로 모으기,
                                  주 모니터만 쓰기(N분 뒤 자동 복원, 기본 180), 원래대로 복원
@@ -49,7 +50,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # tssh 는 DeskTools 저장소(jekim14/desktools, 비공개)의 tools/tssh 에서 개발하고, 공개 거울 저장소 jekim14/tssh 의
 # 같은 경로로 배포한다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -405,7 +406,7 @@ def host_settings(peer: dict, cfg: dict, blocks: list[dict]) -> dict:
         if sc.get("identityfile"):
             merged["key"] = sc["identityfile"]
     saved = cfg.get("hosts", {}).get(peer["name"]) or {}
-    for k in ("user", "port", "key", "args", "alias"):
+    for k in ("user", "port", "key", "args", "alias", "screen"):
         if saved.get(k) not in (None, "", []):
             merged[k] = saved[k]
     if not merged.get("user") and cfg.get("default_user"):
@@ -1319,9 +1320,21 @@ def cmd_display(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str
 
 
 def cmd_screen(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -> int:
+    gather = "--gather" in args
+    args = [a for a in args if a != "--gather"]
     if not args:
-        die("사용법: tssh screen <이름>")
+        die("사용법: tssh screen <이름> [--gather]")
     peer = pick_one_or_die(peers, cfg, blocks, args[0])
+    if gather and peer["os"] == "windows":
+        cmd_display(peers, cfg, blocks, [peer["name"], "gather"])
+    # 한 컴퓨터에 Tailscale 이 두 개 떠 있는 경우처럼 화면 접속만 다른 노드로 해야 할 때 screen= 설정을 따른다.
+    alt = host_settings(peer, cfg, blocks).get("screen")
+    if alt:
+        found = resolve(peers, alt, cfg, blocks)
+        if len(found) == 1:
+            peer = found[0]
+        else:
+            warn(f"screen={alt} 에 맞는 피어가 {len(found)}개라 {peer['name']} 으로 접속합니다.")
     exe = desktools_exe()
     if not exe:
         die("DeskTools(또는 RustDesk) 실행 파일을 찾지 못했습니다. DeskTools 설치기를 먼저 실행하세요.")
@@ -1367,7 +1380,7 @@ def cmd_set(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -
         die(f"'{args[0]}' 에 맞는 피어가 {len(found)}개입니다. 정확한 이름을 쓰세요.")
     name = found[0]["name"]
     kv = parse_kv(args[1:])
-    allowed = {"user", "port", "key", "alias", "args"}
+    allowed = {"user", "port", "key", "alias", "args", "screen"}
     bad = set(kv) - allowed
     if bad:
         die(f"알 수 없는 키: {', '.join(sorted(bad))}. 가능한 키: {', '.join(sorted(allowed))}")

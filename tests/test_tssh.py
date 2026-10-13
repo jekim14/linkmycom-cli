@@ -261,6 +261,27 @@ class PeerTests(unittest.TestCase):
             tssh.http_get = original
         self.assertEqual(len(calls), 2)
 
+    def test_display_remote_ps(self):
+        ps = tssh.display_remote_ps("gather", 2)
+        self.assertIn("-Action gather", ps)
+        self.assertIn("-RestoreMinutes 5", ps)          # 하한 5분
+        self.assertIn("-RunLevel Highest", ps)           # 관리자 창도 옮기기
+        self.assertIn(tssh.REMOTE_DISPLAY_SCRIPT, ps)
+        self.assertIn("-RestoreMinutes 1440", tssh.display_remote_ps("single", 99999))
+        with self.assertRaises(ValueError):
+            tssh.display_remote_ps("format-c", 10)
+        import base64
+        self.assertEqual(base64.b64decode(tssh.encode_ps("ab")).decode("utf-16-le"), "ab")
+
+    def test_parse_minutes(self):
+        self.assertEqual(tssh.parse_minutes(["pc", "single", "--minutes", "30"]), (["pc", "single"], 30))
+        self.assertEqual(tssh.parse_minutes(["pc"]), (["pc"], 180))
+
+    def test_screen_setting_is_merged(self):
+        cfg = {"hosts": {"miniui-macmini": {"user": "jemac", "screen": "macmini"}}}
+        mac = {"name": "miniui-macmini", "hostname": "x", "dns": "", "ip": "100.2.2.2", "os": "macOS", "online": True}
+        self.assertEqual(tssh.host_settings(mac, cfg, [])["screen"], "macmini")
+
     def test_version_helpers(self):
         self.assertEqual(tssh.parse_version("v1.2.10"), (1, 2, 10))
         self.assertGreater(tssh.parse_version("0.2.0"), tssh.parse_version("0.1.9"))

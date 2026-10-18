@@ -1,0 +1,6 @@
+# tssh 가 관리하는 tailnet 공개키 목록. 각 기기의 'tssh setup' / 'tssh keys refresh' 가 이 파일을 받아 authorized_keys 에 넣는다.
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII8lTO165hdIbKsXRtME3Q1PTlkKDE5SIEXqvkke2KU/ tssh@jekim
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBwHVmLNO78bECS6mg90LvENP9G/yXPxoh61rI5ZEk71 tssh@miniui-Macmini
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII/OGgm29ACEl1eLqb4jL3EIMLYZ0ak5usH5+QS4fFhv tssh@jekimlabtop
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGRandYC8w5DZCIaf5j8nzgfGEJ20aFJp29VUQOMVh6Y tssh@officehermes
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJfMmXOHLEIgSof8o3ZgdYu8UJcM6IVUtld59SB/pTZ5 kimjongeun@pfl-sever

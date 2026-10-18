@@ -1,35 +1,35 @@
 #!/usr/bin/env python3
 # Tailscale 피어 목록에서 골라 SSH로 접속하는 명령줄 도구.
-"""tssh - Tailscale SSH 접속기.
+"""linkmycom - Tailscale SSH 접속기. 줄여서 lmc 로도 부르며, 옛 이름 tssh 도 이 명령으로 넘어온다.
 
 사용법:
-  tssh                          피어 목록을 보여 주고 골라서 접속
-  tssh <이름> [ssh 인자...]      이름(일부만 입력해도 됨)으로 바로 접속
-  tssh <사용자>@<이름>           사용자 이름을 지정해 접속
-  tssh -u <사용자> -p <포트> <이름>   한 번만 쓰는 사용자·포트 지정
-  tssh --dns <이름>              IP 대신 MagicDNS 이름으로 접속
-  tssh -n <이름>                 실행할 ssh 명령만 출력 (dry-run)
-  tssh last                      최근 접속한 호스트에 다시 접속
+  linkmycom                          피어 목록을 보여 주고 골라서 접속
+  linkmycom <이름> [ssh 인자...]      이름(일부만 입력해도 됨)으로 바로 접속
+  linkmycom <사용자>@<이름>           사용자 이름을 지정해 접속
+  linkmycom -u <사용자> -p <포트> <이름>   한 번만 쓰는 사용자·포트 지정
+  linkmycom --dns <이름>              IP 대신 MagicDNS 이름으로 접속
+  linkmycom -n <이름>                 실행할 ssh 명령만 출력 (dry-run)
+  linkmycom last                      최근 접속한 호스트에 다시 접속
 
-  tssh list                      피어 목록만 출력
-  tssh set <이름> user=.. port=.. key=.. alias=.. args=..   호스트별 접속 설정 저장
-  tssh unset <이름>              저장한 호스트 설정 삭제
-  tssh resolve <이름>            user@주소 형태로 출력 (scp 등에 활용)
-  tssh export                    ~/.ssh/config 에 tssh 관리 블록 기록
-  tssh config [키=값 ...]        전역 설정 보기/변경 (default_user, use_magicdns, update_repo, auto_update_check)
-  tssh update [--check]          새 버전 확인/적용
-  tssh version                   버전 출력
+  linkmycom list                      피어 목록만 출력
+  linkmycom set <이름> user=.. port=.. key=.. alias=.. args=..   호스트별 접속 설정 저장
+  linkmycom unset <이름>              저장한 호스트 설정 삭제
+  linkmycom resolve <이름>            user@주소 형태로 출력 (scp 등에 활용)
+  linkmycom export                    ~/.ssh/config 에 linkmycom 관리 블록 기록
+  linkmycom config [키=값 ...]        전역 설정 보기/변경 (default_user, use_magicdns, update_repo, auto_update_check)
+  linkmycom update [--check]          새 버전 확인/적용
+  linkmycom version                   버전 출력
 
-  tssh setup [--no-server] [--no-keys]   이 컴퓨터를 SSH 서버로 켜고(Tailscale 대역만 허용) 공개키를 교환
-  tssh keys [show|refresh]       내 공개키 보기 / 저장소의 공개키 목록을 받아 authorized_keys 갱신
-  tssh keys publish [--collect]  (관리 PC) 각 컴퓨터의 공개키를 모아 저장소에 게시
+  linkmycom setup [--no-server] [--no-keys]   이 컴퓨터를 SSH 서버로 켜고(Tailscale 대역만 허용) 공개키를 교환
+  linkmycom keys [show|refresh]       내 공개키 보기 / 저장소의 공개키 목록을 받아 authorized_keys 갱신
+  linkmycom keys publish [--collect]  (관리 PC) 각 컴퓨터의 공개키를 모아 저장소에 게시
 
-  tssh screen <이름> [--gather]  DeskTools 로 그 PC 화면 보기 창을 연다(--gather: 먼저 그 PC 의 창을 주 모니터로 모음)
-                                 tssh set <이름> screen=<다른 이름> 으로 화면용 접속 대상을 따로 지정
-  tssh display <이름|self> [list|gather|single|extend] [--minutes N]
+  linkmycom screen <이름> [--gather]  LinkMyCom 화면공유 앱으로 그 PC 화면 보기 창을 연다(--gather: 먼저 그 PC 의 창을 주 모니터로 모음)
+                                 linkmycom set <이름> screen=<다른 이름> 으로 화면용 접속 대상을 따로 지정
+  linkmycom display <이름|self> [list|gather|single|extend] [--minutes N]
                                  여러 모니터 PC 정리: 모니터 목록, 모든 창을 주 모니터로 모으기,
                                  주 모니터만 쓰기(N분 뒤 자동 복원, 기본 180), 원래대로 복원
-  tssh password                  DeskTools 영구 비밀번호를 내 모든 PC 에 한 번에 설정(직접 입력)
+  linkmycom password                  화면공유 영구 비밀번호를 내 모든 PC 에 한 번에 설정(직접 입력)
 """
 
 from __future__ import annotations
@@ -50,16 +50,16 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
-# tssh 는 DeskTools 저장소(jekim14/desktools, 비공개)의 tools/tssh 에서 개발하고, 공개 거울 저장소 jekim14/tssh 의
-# 같은 경로로 배포한다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
-DEFAULT_REPO = "jekim14/tssh"
+# linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
+# jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
+DEFAULT_REPO = "jekim14/linkmycom-cli"
 # 설정 파일에 남아 있어도 raw 주소로 받을 수 없는 저장소 이름. 읽을 때 지워 기본 저장소를 쓰게 한다.
-LEGACY_REPOS = {"jekim14/desktools"}
+LEGACY_REPOS = {"jekim14/desktools", "jekim14/linkmycom", "jekim14/tssh"}
 DEFAULT_UPDATE_REF = "HEAD"
-DEFAULT_UPDATE_PATH = "tools/tssh/tssh.py"
-DEFAULT_KEYS_PATH = "tools/tssh/authorized_keys"
+DEFAULT_UPDATE_PATH = "tools/linkmycom/linkmycom.py"
+DEFAULT_KEYS_PATH = "tools/linkmycom/authorized_keys"
 CONFIG_DIR = Path.home() / ".tssh"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 STATE_PATH = CONFIG_DIR / "state.json"
@@ -650,7 +650,7 @@ def ask_user_if_missing(peer: dict, cfg: dict, blocks: list[dict]) -> None:
         ans = ""
     cfg["hosts"][peer["name"]] = {"user": ans or default}
     save_json(CONFIG_PATH, cfg)
-    print(f"저장했습니다. 바꾸려면: tssh set {peer['name']} user=<이름>")
+    print(f"저장했습니다. 바꾸려면: linkmycom set {peer['name']} user=<이름>")
 
 
 # ---------------------------------------------------------------- export.
@@ -719,7 +719,7 @@ def parse_version(v: str) -> tuple[int, ...]:
 
 
 def http_get(url: str, timeout: float = 5.0, headers: dict | None = None) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": f"tssh/{__version__}", "Accept": "*/*", **(headers or {})})
+    req = urllib.request.Request(url, headers={"User-Agent": f"linkmycom/{__version__}", "Accept": "*/*", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
@@ -745,7 +745,7 @@ def fetch_repo_file(repo: str, ref: str, path: str, timeout: float = 5.0) -> byt
 
 def fetch_latest(repo: str, timeout: float = 5.0, ref: str = DEFAULT_UPDATE_REF,
                  path: str = DEFAULT_UPDATE_PATH) -> tuple[str, str]:
-    """(참조 이름, tssh.py 원문) 을 돌려준다. 배포 저장소 기본 브랜치의 파일을 그대로 받는다. 실패하면 예외."""
+    """(참조 이름, linkmycom.py 원문) 을 돌려준다. 배포 저장소 기본 브랜치의 파일을 그대로 받는다. 실패하면 예외."""
     src = fetch_repo_file(repo, ref, path, timeout).decode("utf-8")
     if not version_in_source(src):
         raise RuntimeError(f"받은 파일에 버전이 없습니다: {repo}/{ref}/{path}")
@@ -768,14 +768,23 @@ def write_self(target: Path, src: str) -> None:
     os.replace(tmp, target)
 
 
+def update_target(here: Path) -> Path:
+    """업데이트로 바꿀 파일. 옛 이름 파일이 넘김 파일이 됐으면 옆의 새 이름 파일을 바꾼다."""
+    if here.name in LEGACY_NAMES:
+        new = here.with_name("linkmycom.py" if here.suffix == ".py" else "linkmycom")
+        if new.exists():
+            return new
+    return here
+
+
 def cmd_update(cfg: dict, check_only: bool) -> int:
     repo = cfg.get("update_repo") or DEFAULT_REPO
     ref = cfg.get("update_ref") or DEFAULT_UPDATE_REF
-    print(f"저장소 {repo} ({ref}) 에서 최신 tssh 를 확인합니다...")
+    print(f"저장소 {repo} ({ref}) 에서 최신 linkmycom 를 확인합니다...")
     try:
         tag, src = fetch_latest(repo, timeout=15, ref=ref)
     except Exception as e:  # noqa: BLE001
-        die(f"최신 파일을 가져오지 못했습니다: {e}\n다른 저장소를 쓴다면 'tssh config update_repo=<owner/repo>' 로 지정하세요.")
+        die(f"최신 파일을 가져오지 못했습니다: {e}\n다른 저장소를 쓴다면 'linkmycom config update_repo=<owner/repo>' 로 지정하세요.")
     remote = version_in_source(src)
     if not remote:
         die("받은 파일에서 버전을 찾지 못했습니다.")
@@ -784,9 +793,9 @@ def cmd_update(cfg: dict, check_only: bool) -> int:
         return 0
     print(f"새 버전 {remote} (태그 {tag}) 이(가) 있습니다. 현재 {__version__}.")
     if check_only:
-        print("적용하려면: tssh update")
+        print("적용하려면: linkmycom update")
         return 0
-    target = Path(__file__).resolve()
+    target = update_target(Path(__file__).resolve())
     write_self(target, src)
     state = load_json(STATE_PATH)
     state["last_update_check"] = datetime.now(timezone.utc).isoformat()
@@ -808,7 +817,7 @@ def background_update_check(cfg: dict, notice: list[str]) -> threading.Thread | 
         age = 1e9
     if age < 86400:
         if state.get("update_available"):
-            notice.append(f"새 버전 {state['update_available']} 이(가) 있습니다. 'tssh update' 로 적용하세요.")
+            notice.append(f"새 버전 {state['update_available']} 이(가) 있습니다. 'linkmycom update' 로 적용하세요.")
         return None
 
     def work() -> None:
@@ -825,7 +834,7 @@ def background_update_check(cfg: dict, notice: list[str]) -> threading.Thread | 
             remote = version_in_source(src)
             if remote and parse_version(remote) > parse_version(__version__):
                 st["update_available"] = remote
-                notice.append(f"새 버전 {remote} 이(가) 있습니다. 'tssh update' 로 적용하세요.")
+                notice.append(f"새 버전 {remote} 이(가) 있습니다. 'linkmycom update' 로 적용하세요.")
             else:
                 st.pop("update_available", None)
         except Exception:  # noqa: BLE001
@@ -840,7 +849,7 @@ def background_update_check(cfg: dict, notice: list[str]) -> threading.Thread | 
     return t
 
 
-# ---------------------------------------------------------------- 키 교환과 SSH 서버 설정 (tssh setup / keys).
+# ---------------------------------------------------------------- 키 교환과 SSH 서버 설정 (linkmycom setup / keys).
 
 
 def keys_url(cfg: dict) -> str:
@@ -971,7 +980,7 @@ try {
     if (-not $installed) {
       Write-Host 'Falling back to the signed Win32-OpenSSH MSI from github.com/PowerShell/Win32-OpenSSH.'
       [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-      $rel = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/PowerShell/Win32-OpenSSH/releases/latest' -Headers @{ 'User-Agent' = 'tssh' }
+      $rel = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/PowerShell/Win32-OpenSSH/releases/latest' -Headers @{ 'User-Agent' = 'linkmycom' }
       $asset = $rel.assets | Where-Object { $_.name -match '^OpenSSH-Win64-v.*\.msi$' } | Select-Object -First 1
       if (-not $asset) { throw 'Win32-OpenSSH MSI asset not found in the latest release.' }
       $msi = Join-Path $env:TEMP $asset.name
@@ -1011,8 +1020,8 @@ try {
 
 
 def setup_server_windows() -> bool:
-    log = Path(tempfile.gettempdir()) / "tssh-setup.log"
-    script = Path(tempfile.gettempdir()) / "tssh-setup.ps1"
+    log = Path(tempfile.gettempdir()) / "linkmycom-setup.log"
+    script = Path(tempfile.gettempdir()) / "linkmycom-setup.ps1"
     script.write_text(WINDOWS_SERVER_SETUP_PS1, encoding="ascii")
     if log.exists():
         log.unlink()
@@ -1089,7 +1098,7 @@ def cmd_setup(cfg: dict, args: list[str]) -> int:
     """이 컴퓨터를 tailnet 안에서 SSH 로 들어올 수 있게 만들고 공개키를 교환한다."""
     no_server = "--no-server" in args
     no_keys = "--no-keys" in args
-    print(c("tssh setup: 이 컴퓨터를 SSH 로 묶습니다.", "1"))
+    print(c("linkmycom setup: 이 컴퓨터를 SSH 로 묶습니다.", "1"))
     pub = ensure_local_key()
     print(f"이 컴퓨터의 공개키: {pub[:40]}...")
     if not no_keys:
@@ -1111,8 +1120,8 @@ def cmd_setup(cfg: dict, args: list[str]) -> int:
     state["server_ok"] = ok
     save_json(STATE_PATH, state)
     if ok:
-        print(c("완료. 이제 다른 기기에서 'tssh <이 컴퓨터 이름>' 으로 들어올 수 있습니다.", "32"))
-        print("이 컴퓨터의 공개키를 저장소 목록에 올리려면 관리 PC 에서 'tssh keys publish --collect' 를 실행하세요.")
+        print(c("완료. 이제 다른 기기에서 'linkmycom <이 컴퓨터 이름>' 으로 들어올 수 있습니다.", "32"))
+        print("이 컴퓨터의 공개키를 저장소 목록에 올리려면 관리 PC 에서 'linkmycom keys publish --collect' 를 실행하세요.")
     return 0 if ok else 1
 
 
@@ -1143,7 +1152,7 @@ def collect_keys(peers: list[dict], cfg: dict, blocks: list[dict]) -> list[tuple
             continue
         keys = parse_keys(r.stdout)
         if r.returncode != 0 or not keys:
-            reason = (r.stderr or "").strip().splitlines()[-1:] or ["공개키 없음 (tssh setup 미실행)"]
+            reason = (r.stderr or "").strip().splitlines()[-1:] or ["공개키 없음 (linkmycom setup 미실행)"]
             print(f"  {p['name']}: 실패 - {reason[0]}")
             continue
         found.append((p["name"], keys[0]))
@@ -1152,7 +1161,7 @@ def collect_keys(peers: list[dict], cfg: dict, blocks: list[dict]) -> list[tuple
 
 
 def repo_dir(cfg: dict) -> Path:
-    """DeskTools 저장소 복제본의 루트. 설정값, 이 파일의 위치(tools/tssh/tssh.py) 순으로 찾는다."""
+    """LinkMyCom 저장소 복제본의 루트. 설정값, 이 파일의 위치(tools/linkmycom/linkmycom.py) 순으로 찾는다."""
     d = cfg.get("repo_dir")
     if d and (Path(d) / ".git").exists():
         return Path(d)
@@ -1160,7 +1169,7 @@ def repo_dir(cfg: dict) -> Path:
     for cand in (here.parent, here.parents[2] if len(here.parents) > 2 else here.parent):
         if (cand / ".git").exists():
             return cand
-    die("저장소 복제본 위치를 모릅니다. 'tssh config repo_dir=<desktools 클론 경로>' 로 지정하세요.")
+    die("저장소 복제본 위치를 모릅니다. 'linkmycom config repo_dir=<linkmycom 클론 경로>' 로 지정하세요.")
 
 
 def keys_file(cfg: dict) -> Path:
@@ -1193,7 +1202,7 @@ def cmd_keys(peers_loader, cfg: dict, args: list[str]) -> int:
             print("각 컴퓨터에서 공개키를 모읍니다...")
             for name, key in collect_keys(peers, cfg, blocks):
                 entries[key] = key
-        header = "# tssh 가 관리하는 tailnet 공개키 목록. 각 기기의 'tssh setup' / 'tssh keys refresh' 가 이 파일을 받아 authorized_keys 에 넣는다.\n"
+        header = "# linkmycom 가 관리하는 tailnet 공개키 목록. 각 기기의 'linkmycom setup' / 'linkmycom keys refresh' 가 이 파일을 받아 authorized_keys 에 넣는다.\n"
         text = header + "\n".join(entries) + "\n"
         changed = text != existing
         target.write_text(text, encoding="utf-8")
@@ -1210,9 +1219,9 @@ def cmd_keys(peers_loader, cfg: dict, args: list[str]) -> int:
                 r = subprocess.run(cmd, cwd=rd)
                 if r.returncode != 0:
                     die(f"실패: {' '.join(cmd)}")
-            print(f"게시했습니다. 각 기기는 하루 안에 자동으로 받거나 'tssh keys refresh' 로 바로 받습니다.\n{keys_url(cfg)}")
+            print(f"게시했습니다. 각 기기는 하루 안에 자동으로 받거나 'linkmycom keys refresh' 로 바로 받습니다.\n{keys_url(cfg)}")
         return 0
-    die("사용법: tssh keys [show|refresh|collect|publish [--collect]]")
+    die("사용법: linkmycom keys [show|refresh|collect|publish [--collect]]")
 
 
 # ---------------------------------------------------------------- 화면 보기와 여러 모니터 도우미 (screen / display / password).
@@ -1297,7 +1306,7 @@ def parse_minutes(args: list[str], default: int = 180) -> tuple[list[str], int]:
 def cmd_display(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -> int:
     args, minutes = parse_minutes(args)
     if not args:
-        die("사용법: tssh display <이름|self> [list|gather|single|extend] [--minutes N]")
+        die("사용법: linkmycom display <이름|self> [list|gather|single|extend] [--minutes N]")
     action = args[1] if len(args) > 1 else "list"
     if action not in DISPLAY_ACTIONS:
         die(f"알 수 없는 동작 {action}. 가능: {', '.join(DISPLAY_ACTIONS)}")
@@ -1323,7 +1332,7 @@ def cmd_screen(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]
     gather = "--gather" in args
     args = [a for a in args if a != "--gather"]
     if not args:
-        die("사용법: tssh screen <이름> [--gather]")
+        die("사용법: linkmycom screen <이름> [--gather]")
     peer = pick_one_or_die(peers, cfg, blocks, args[0])
     if gather and peer["os"] == "windows":
         cmd_display(peers, cfg, blocks, [peer["name"], "gather"])
@@ -1337,7 +1346,7 @@ def cmd_screen(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]
             warn(f"screen={alt} 에 맞는 피어가 {len(found)}개라 {peer['name']} 으로 접속합니다.")
     exe = desktools_exe()
     if not exe:
-        die("DeskTools(또는 RustDesk) 실행 파일을 찾지 못했습니다. DeskTools 설치기를 먼저 실행하세요.")
+        die("화면공유 앱(DeskTools 또는 RustDesk) 실행 파일을 찾지 못했습니다. LinkMyCom 설치기를 먼저 실행하세요.")
     if not peer["online"]:
         warn(f"{peer['name']} 은(는) 오프라인으로 표시됩니다.")
     print(c(f"→ 화면 보기 {peer['name']} ({peer['ip']})", "36") + f"  {exe}")
@@ -1374,7 +1383,7 @@ def parse_kv(items: list[str]) -> dict:
 
 def cmd_set(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -> None:
     if len(args) < 2:
-        die("사용법: tssh set <이름> user=.. port=.. key=.. alias=.. args=\"-A -X\"")
+        die("사용법: linkmycom set <이름> user=.. port=.. key=.. alias=.. args=\"-A -X\"")
     found = resolve(peers, args[0], cfg, blocks)
     if len(found) != 1:
         die(f"'{args[0]}' 에 맞는 피어가 {len(found)}개입니다. 정확한 이름을 쓰세요.")
@@ -1399,7 +1408,7 @@ def cmd_set(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -
 
 def cmd_unset(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -> None:
     if not args:
-        die("사용법: tssh unset <이름>")
+        die("사용법: linkmycom unset <이름>")
     name = args[0]
     found = resolve(peers, name, cfg, blocks)
     if len(found) == 1:
@@ -1443,7 +1452,7 @@ def pick_one_or_die(peers: list[dict], cfg: dict, blocks: list[dict], query: str
     if len(found) == 1:
         return found[0]
     if not found:
-        die(f"'{query}' 에 맞는 피어가 없습니다. 'tssh list' 로 이름을 확인하세요.")
+        die(f"'{query}' 에 맞는 피어가 없습니다. 'linkmycom list' 로 이름을 확인하세요.")
     if not sys.stdin.isatty():
         return found[0]
     print(c(f"'{query}' 에 맞는 피어가 {len(found)}개입니다.", "33"))
@@ -1454,7 +1463,7 @@ def pick_one_or_die(peers: list[dict], cfg: dict, blocks: list[dict], query: str
 
 
 def parse_connect_args(argv: list[str]) -> dict:
-    """tssh 자체 옵션(호스트 이름 앞)과 호스트, 그 뒤 ssh 인자를 나눈다."""
+    """linkmycom 자체 옵션(호스트 이름 앞)과 호스트, 그 뒤 ssh 인자를 나눈다."""
     opts: dict = {"user": None, "port": None, "use_dns": None, "dry_run": False, "host": None, "extra": []}
     i = 0
     while i < len(argv):
@@ -1476,7 +1485,7 @@ def parse_connect_args(argv: list[str]) -> dict:
         elif a in ("-h", "--help"):
             opts["host"] = "help"
         elif a.startswith("-"):
-            die(f"알 수 없는 옵션 {a}. ssh 옵션은 호스트 이름 뒤에 쓰세요. 예: tssh pfl -L 8080:localhost:80")
+            die(f"알 수 없는 옵션 {a}. ssh 옵션은 호스트 이름 뒤에 쓰세요. 예: linkmycom pfl -L 8080:localhost:80")
         else:
             opts["host"] = a
         i += 1
@@ -1485,6 +1494,106 @@ def parse_connect_args(argv: list[str]) -> dict:
         opts["user"] = opts["user"] or u
         opts["host"] = h
     return opts
+
+
+# ---------------------------------------------------------------- 옛 이름(tssh) 설치본 옮기기.
+
+LEGACY_NAMES = {"tssh", "tssh.py"}
+FORWARDER_MARK = "linkmycom-forwarder"
+INVOKED_AS_ENV = "LINKMYCOM_INVOKED_AS"
+
+
+def forwarder_source(target_name: str) -> str:
+    """옛 tssh 진입 파일을 대신할 짧은 파이썬. 옆의 새 파일을 같은 인자로 실행한다."""
+    return (
+        "#!/usr/bin/env python3\n"
+        f"# {FORWARDER_MARK}: tssh 는 linkmycom 으로 이름이 바뀌었다. 옆의 {target_name} 를 같은 인자로 실행한다.\n"
+        "import os, runpy, sys\n"
+        "from pathlib import Path\n"
+        f"os.environ.setdefault({INVOKED_AS_ENV!r}, 'tssh')\n"
+        f"sys.argv[0] = str(Path(__file__).resolve().with_name({target_name!r}))\n"
+        "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+    )
+
+
+def is_forwarder(src: str) -> bool:
+    """넘김 파일은 둘째 줄이 표식 주석이다. 본 소스에도 표식 문자열이 있으므로 위치로 구별한다."""
+    lines = src.splitlines()
+    return len(lines) > 1 and lines[1].startswith(f"# {FORWARDER_MARK}:")
+
+
+def replace_text(path: Path, text: str, mode: int | None = None) -> None:
+    """임시 파일에 쓴 뒤 원자적으로 바꾼다. 줄바꿈은 그대로 쓴다."""
+    tmp = path.with_name(path.name + ".new")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def migrate_legacy_install(here: Path) -> list[Path]:
+    """옛 이름 파일로 실행됐으면 옆에 linkmycom·lmc 를 설치하고 옛 파일을 넘김 파일로 바꾼다.
+
+    tssh update 가 옛 파일 자리에 이 코드를 받아 처음 실행될 때 한 번 일어난다. 소스 저장소 안에서는 하지 않는다.
+    새로 만든 파일 목록을 돌려준다.
+    """
+    if here.name not in LEGACY_NAMES or any((p / ".git").exists() for p in here.parents[:3]):
+        return []
+    src = here.read_text(encoding="utf-8")
+    if is_forwarder(src):
+        return []
+    made: list[Path] = []
+    if here.suffix == ".py":  # Windows: %LOCALAPPDATA%\tssh, 타워 폴더
+        new = here.with_name("linkmycom.py")
+        replace_text(new, src)
+        made.append(new)
+        py = sys.executable
+        shims = {here.with_name("linkmycom.cmd"): f'@echo off\r\n"{py}" "%~dp0linkmycom.py" %*\r\n',
+                 here.with_name("lmc.cmd"): '@echo off\r\ncall "%~dp0linkmycom.cmd" %*\r\n'}
+        if here.with_name("tssh.ps1").exists():
+            shims[here.with_name("linkmycom.ps1")] = f'& "{py}" "$PSScriptRoot\\linkmycom.py" @args\r\nexit $LASTEXITCODE\r\n'
+        # 원클릭 설치기는 타워 폴더 옆 bin 에 tssh.cmd 만 두고 PATH 에 넣는다. 같은 자리에 새 명령도 둔다.
+        bin_dir = here.parent.parent / "bin"
+        if here.parent.name.lower() == "tower" and (bin_dir / "tssh.cmd").exists():
+            target = here.with_name("linkmycom.cmd")
+            shims[bin_dir / "linkmycom.cmd"] = f'@echo off\r\ncall "{target}" %*\r\n'
+            shims[bin_dir / "lmc.cmd"] = f'@echo off\r\ncall "{target}" %*\r\n'
+        for path, body in shims.items():
+            if not path.exists():
+                replace_text(path, body)
+                made.append(path)
+        replace_text(here, forwarder_source("linkmycom.py"))
+    else:  # macOS/Linux: ~/.local/bin/tssh
+        new = here.with_name("linkmycom")
+        replace_text(new, src, 0o755)
+        made.append(new)
+        lmc = here.with_name("lmc")
+        if not lmc.exists() and not lmc.is_symlink():
+            try:
+                lmc.symlink_to("linkmycom")
+            except OSError:
+                replace_text(lmc, src, 0o755)
+            made.append(lmc)
+        replace_text(here, forwarder_source("linkmycom"), 0o755)
+    return made
+
+
+def legacy_name_notice(invoked_as: str, made: list[Path], state: dict) -> str | None:
+    """옛 이름 tssh 로 불렸을 때 사용자에게 보여 줄 안내. None 이면 아무것도 출력하지 않는다.
+
+    invoked_as: 옛 이름으로 불렸으면 "tssh", 새 이름이면 "".
+    made: 이번 실행에서 새로 설치한 파일(처음 옮긴 순간에만 비어 있지 않다).
+    state: ~/.tssh/state.json 내용. 여기에 값을 넣으면 저장된다(예: 마지막 안내 날짜).
+    """
+    # 하루 한 번만 알린다. 옛 이름을 쓰는 스크립트·원격 명령을 방해하지 않으면서 잊지 않게 한다.
+    today = datetime.now().date().isoformat()
+    if not made and state.get("last_tssh_notice") == today:
+        return None
+    state["last_tssh_notice"] = today
+    if made:
+        return f"tssh 는 linkmycom(줄여서 lmc)으로 이름이 바뀌었습니다. 같은 폴더에 새 명령을 설치했습니다: {', '.join(p.name for p in made)}"
+    return f"알림: {invoked_as} 는 linkmycom(줄여서 lmc)으로 이름이 바뀌었습니다. 옛 이름도 계속 동작합니다."
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1496,11 +1605,26 @@ def main(argv: list[str] | None = None) -> int:
                 stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
             except Exception:
                 pass
+    try:
+        made = migrate_legacy_install(Path(__file__).resolve())
+    except OSError as e:
+        made = []
+        print(f"새 이름(linkmycom·lmc) 설치를 건너뛰었습니다: {e}", file=sys.stderr)
+    invoked_as = "tssh" if made else os.environ.get(INVOKED_AS_ENV, "")
+    if invoked_as:
+        state = load_json(STATE_PATH)
+        message = legacy_name_notice(invoked_as, made, state)
+        if message:
+            print(message, file=sys.stderr)
+            try:
+                save_json(STATE_PATH, state)
+            except OSError:
+                pass
     cfg = load_config()
     sub = argv[0] if argv and argv[0] in SUBCOMMANDS else None
 
     if sub == "version":
-        print(f"tssh {__version__}")
+        print(f"linkmycom {__version__}")
         return 0
     if sub == "help" or (argv and argv[0] in ("-h", "--help")):
         print(__doc__)
@@ -1539,7 +1663,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_screen(peers, cfg, blocks, argv[1:])
     if sub == "resolve":
         if len(argv) < 2:
-            die("사용법: tssh resolve <이름>")
+            die("사용법: linkmycom resolve <이름>")
         peer = pick_one_or_die(peers, cfg, blocks, argv[1])
         st = host_settings(peer, cfg, blocks)
         target = peer["dns"] if cfg.get("use_magicdns") and peer["dns"] else peer["ip"]
@@ -1561,7 +1685,7 @@ def main(argv: list[str] | None = None) -> int:
         return connect(peer, cfg, blocks, opts["extra"], opts["user"], opts["port"], opts["use_dns"], opts["dry_run"])
 
     if not sys.stdin.isatty():
-        die("대화형 선택은 터미널에서만 됩니다. 'tssh <이름>' 으로 호스트를 지정하세요.")
+        die("대화형 선택은 터미널에서만 됩니다. 'linkmycom <이름>' 으로 호스트를 지정하세요.")
     notice: list[str] = []
     background_update_check(cfg, notice)
     while True:

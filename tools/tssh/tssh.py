@@ -50,7 +50,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -1532,6 +1532,25 @@ def replace_text(path: Path, text: str, mode: int | None = None) -> None:
     os.replace(tmp, path)
 
 
+def ensure_tower_bin_shims(here: Path) -> list[Path]:
+    """원클릭 설치기는 타워 폴더 옆 bin 에 tssh.cmd 만 두고 PATH 에 넣었다. 같은 자리에 linkmycom·lmc 도 둔다.
+
+    타워 업데이터로 새 패키지를 받은 PC 는 옛 이름 파일이 이미 넘김 파일이라 옮기기가 일어나지 않으므로
+    타워 폴더의 linkmycom.py 가 실행될 때마다 확인한다. 이미 있으면 아무것도 하지 않는다.
+    """
+    bin_dir = here.parent.parent / "bin"
+    target = here.with_name("linkmycom.cmd")
+    if here.parent.name.lower() != "tower" or not (bin_dir / "tssh.cmd").exists() or not target.exists():
+        return []
+    made: list[Path] = []
+    for name in ("linkmycom.cmd", "lmc.cmd"):
+        path = bin_dir / name
+        if not path.exists():
+            replace_text(path, f'@echo off\r\ncall "{target}" %*\r\n')
+            made.append(path)
+    return made
+
+
 def migrate_legacy_install(here: Path) -> list[Path]:
     """옛 이름 파일로 실행됐으면 옆에 linkmycom·lmc 를 설치하고 옛 파일을 넘김 파일로 바꾼다.
 
@@ -1553,16 +1572,11 @@ def migrate_legacy_install(here: Path) -> list[Path]:
                  here.with_name("lmc.cmd"): '@echo off\r\ncall "%~dp0linkmycom.cmd" %*\r\n'}
         if here.with_name("tssh.ps1").exists():
             shims[here.with_name("linkmycom.ps1")] = f'& "{py}" "$PSScriptRoot\\linkmycom.py" @args\r\nexit $LASTEXITCODE\r\n'
-        # 원클릭 설치기는 타워 폴더 옆 bin 에 tssh.cmd 만 두고 PATH 에 넣는다. 같은 자리에 새 명령도 둔다.
-        bin_dir = here.parent.parent / "bin"
-        if here.parent.name.lower() == "tower" and (bin_dir / "tssh.cmd").exists():
-            target = here.with_name("linkmycom.cmd")
-            shims[bin_dir / "linkmycom.cmd"] = f'@echo off\r\ncall "{target}" %*\r\n'
-            shims[bin_dir / "lmc.cmd"] = f'@echo off\r\ncall "{target}" %*\r\n'
         for path, body in shims.items():
             if not path.exists():
                 replace_text(path, body)
                 made.append(path)
+        made += ensure_tower_bin_shims(new)
         replace_text(here, forwarder_source("linkmycom.py"))
     else:  # macOS/Linux: ~/.local/bin/tssh
         new = here.with_name("linkmycom")
@@ -1606,7 +1620,10 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:
                 pass
     try:
-        made = migrate_legacy_install(Path(__file__).resolve())
+        here = Path(__file__).resolve()
+        made = migrate_legacy_install(here)
+        if here.name == "linkmycom.py":
+            ensure_tower_bin_shims(here)
     except OSError as e:
         made = []
         print(f"새 이름(linkmycom·lmc) 설치를 건너뛰었습니다: {e}", file=sys.stderr)

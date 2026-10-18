@@ -335,6 +335,21 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertTrue({"DeskTools/tower/linkmycom.ps1", "DeskTools/bin/linkmycom.cmd", "DeskTools/bin/lmc.cmd"} <= made)
         self.assertIn(str(tower / "linkmycom.cmd"), (bin_dir / "lmc.cmd").read_text(encoding="utf-8"))
 
+    def test_tower_updated_by_package_gets_bin_shims(self):
+        # 타워 업데이터로 새 패키지를 받은 PC: tssh.py 는 이미 넘김 파일이고 bin 에는 tssh.cmd 만 있다.
+        tower = self.root / "DeskTools" / "tower"
+        bin_dir = self.root / "DeskTools" / "bin"
+        tower.mkdir(parents=True)
+        bin_dir.mkdir()
+        (tower / "linkmycom.py").write_text(self.src, encoding="utf-8")
+        (tower / "linkmycom.cmd").write_text("@echo off", encoding="utf-8")
+        (bin_dir / "tssh.cmd").write_text("@echo off", encoding="utf-8")
+        made = {p.name for p in linkmycom.ensure_tower_bin_shims(tower / "linkmycom.py")}
+        self.assertEqual(made, {"linkmycom.cmd", "lmc.cmd"})
+        self.assertIn(str(tower / "linkmycom.cmd"), (bin_dir / "linkmycom.cmd").read_text(encoding="utf-8"))
+        self.assertEqual(linkmycom.ensure_tower_bin_shims(tower / "linkmycom.py"), [])
+        self.assertEqual(linkmycom.ensure_tower_bin_shims(self.root / "x" / "linkmycom.py"), [])
+
     def test_posix_bin(self):
         d = self.root / "bin"
         d.mkdir()

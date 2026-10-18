@@ -50,7 +50,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -1532,6 +1532,59 @@ def replace_text(path: Path, text: str, mode: int | None = None) -> None:
     os.replace(tmp, path)
 
 
+def shim_path(path: str | Path, ps: bool = False) -> str:
+    """배치·PowerShell 파일에 넣을 경로. 사용자 폴더 아래면 환경 변수로 바꾼다.
+
+    한글 사용자 이름이 든 경로를 파일에 그대로 쓰면 cmd.exe·PowerShell 5.1 이 다른 코드 페이지로 읽어 깨진다.
+    """
+    s = str(path)
+    for var in ("LOCALAPPDATA", "APPDATA", "USERPROFILE"):
+        base = (os.environ.get(var) or "").rstrip("\\")
+        if base and s.lower().startswith(base.lower() + "\\"):
+            return (f"$env:{var}" if ps else f"%{var}%") + s[len(base):]
+    return s
+
+
+def shim_encoding() -> str:
+    """cmd.exe 가 배치 파일을 읽는 콘솔 코드 페이지(한국어 Windows 는 cp949)."""
+    try:
+        import ctypes
+        return f"cp{ctypes.windll.kernel32.GetOEMCP()}"  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return "utf-8"
+
+
+def write_shim(path: Path, body: str) -> None:
+    """배치 파일을 쓴다. 환경 변수로 못 바꾼 비ASCII 문자는 콘솔 코드 페이지로 쓴다."""
+    tmp = path.with_name(path.name + ".new")
+    tmp.write_bytes(body.encode("ascii" if body.isascii() else shim_encoding(), errors="replace"))
+    os.replace(tmp, path)
+
+
+def python_shim(py: str) -> str:
+    return f'@echo off\r\n"{shim_path(py)}" "%~dp0linkmycom.py" %*\r\n'
+
+
+def repair_shims(here: Path) -> list[Path]:
+    """linkmycom.py 옆의 옛 tssh.cmd 와 파이썬 경로가 깨진 linkmycom.cmd 를 고친다. 고친 파일 목록을 돌려준다.
+
+    옛 설치기는 파이썬 경로를 ASCII 로 써서 한글 사용자 이름이 '???'가 됐다. 그런 파일은 실행되지 않는다.
+    """
+    if here.name != "linkmycom.py" or not here.with_name("linkmycom.cmd").exists():
+        return []
+    fixed: list[Path] = []
+    cmd = here.with_name("linkmycom.cmd")
+    m = re.search(r'"([^"]+\.exe)"', cmd.read_bytes().decode(shim_encoding(), errors="replace"))
+    if m and ("?" in m.group(1) or "�" in m.group(1) or not os.path.exists(os.path.expandvars(m.group(1)))):
+        write_shim(cmd, python_shim(sys.executable))
+        fixed.append(cmd)
+    legacy = here.with_name("tssh.cmd")
+    if legacy.exists() and b"linkmycom" not in legacy.read_bytes().lower():
+        write_shim(legacy, '@echo off\r\nset LINKMYCOM_INVOKED_AS=tssh\r\ncall "%~dp0linkmycom.cmd" %*\r\n')
+        fixed.append(legacy)
+    return fixed
+
+
 def ensure_tower_bin_shims(here: Path) -> list[Path]:
     """원클릭 설치기는 타워 폴더 옆 bin 에 tssh.cmd 만 두고 PATH 에 넣었다. 같은 자리에 linkmycom·lmc 도 둔다.
 
@@ -1546,7 +1599,7 @@ def ensure_tower_bin_shims(here: Path) -> list[Path]:
     for name in ("linkmycom.cmd", "lmc.cmd"):
         path = bin_dir / name
         if not path.exists():
-            replace_text(path, f'@echo off\r\ncall "{target}" %*\r\n')
+            write_shim(path, f'@echo off\r\ncall "%~dp0..\\{here.parent.name}\\linkmycom.cmd" %*\r\n')
             made.append(path)
     return made
 
@@ -1567,14 +1620,14 @@ def migrate_legacy_install(here: Path) -> list[Path]:
         new = here.with_name("linkmycom.py")
         replace_text(new, src)
         made.append(new)
-        py = sys.executable
-        shims = {here.with_name("linkmycom.cmd"): f'@echo off\r\n"{py}" "%~dp0linkmycom.py" %*\r\n',
+        shims = {here.with_name("linkmycom.cmd"): python_shim(sys.executable),
                  here.with_name("lmc.cmd"): '@echo off\r\ncall "%~dp0linkmycom.cmd" %*\r\n'}
         if here.with_name("tssh.ps1").exists():
-            shims[here.with_name("linkmycom.ps1")] = f'& "{py}" "$PSScriptRoot\\linkmycom.py" @args\r\nexit $LASTEXITCODE\r\n'
+            shims[here.with_name("linkmycom.ps1")] = (f'& "{shim_path(sys.executable, ps=True)}" "$PSScriptRoot\\linkmycom.py" @args\r\n'
+                                                      'exit $LASTEXITCODE\r\n')
         for path, body in shims.items():
             if not path.exists():
-                replace_text(path, body)
+                write_shim(path, body)
                 made.append(path)
         made += ensure_tower_bin_shims(new)
         replace_text(here, forwarder_source("linkmycom.py"))
@@ -1622,7 +1675,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         here = Path(__file__).resolve()
         made = migrate_legacy_install(here)
-        if here.name == "linkmycom.py":
+        if here.name == "linkmycom.py" and os.name == "nt":
+            repair_shims(here)
             ensure_tower_bin_shims(here)
     except OSError as e:
         made = []

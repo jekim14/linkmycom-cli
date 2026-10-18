@@ -37,10 +37,27 @@ $dest = Join-Path $env:LOCALAPPDATA "linkmycom"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Item $src (Join-Path $dest "linkmycom.py") -Force
 
+# Paths under the user profile are written as %LOCALAPPDATA% etc. A literal non-ASCII user name (e.g. Korean) would be
+# garbled, because cmd.exe reads batch files in the console code page. Anything left non-ASCII is written in that code page.
+function Get-ShimPath([string]$Path, [switch]$PowerShell) {
+    foreach ($var in @("LOCALAPPDATA", "APPDATA", "USERPROFILE")) {
+        $base = [Environment]::GetEnvironmentVariable($var)
+        if ($base) {
+            $base = $base.TrimEnd("\")
+            if ($Path.StartsWith($base + "\", [StringComparison]::OrdinalIgnoreCase)) {
+                $prefix = if ($PowerShell) { "`$env:$var" } else { "%$var%" }
+                return $prefix + $Path.Substring($base.Length)
+            }
+        }
+    }
+    return $Path
+}
+$shimEncoding = [System.Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+function Write-Shim([string]$Path, [string]$Body) { [System.IO.File]::WriteAllText($Path, $Body, $shimEncoding) }
+
 # cmd.exe shims: linkmycom and its short name lmc.
-$shimBody = "@echo off`r`n`"$python`" `"%~dp0linkmycom.py`" %*`r`n"
-[System.IO.File]::WriteAllText((Join-Path $dest "linkmycom.cmd"), $shimBody, [System.Text.Encoding]::ASCII)
-[System.IO.File]::WriteAllText((Join-Path $dest "lmc.cmd"), "@echo off`r`ncall `"%~dp0linkmycom.cmd`" %*`r`n", [System.Text.Encoding]::ASCII)
+Write-Shim (Join-Path $dest "linkmycom.cmd") "@echo off`r`n`"$(Get-ShimPath $python)`" `"%~dp0linkmycom.py`" %*`r`n"
+Write-Shim (Join-Path $dest "lmc.cmd") "@echo off`r`ncall `"%~dp0linkmycom.cmd`" %*`r`n"
 
 # PowerShell wrapper: PowerShell resolves linkmycom.ps1 before linkmycom.cmd, so quoted arguments survive intact.
 # Skipped when the execution policy would refuse to run it.
@@ -50,15 +67,14 @@ if ($policy -in @("Restricted", "AllSigned")) {
     if (Test-Path $ps1) { Remove-Item $ps1 -Force }
     Write-Host "Execution policy is $policy; skipping the linkmycom.ps1 wrapper (linkmycom.cmd will be used)."
 } else {
-    $ps1Body = "# linkmycom PowerShell wrapper: forwards all arguments to linkmycom.py.`r`n& `"$python`" `"`$PSScriptRoot\linkmycom.py`" @args`r`nexit `$LASTEXITCODE`r`n"
-    [System.IO.File]::WriteAllText($ps1, $ps1Body, [System.Text.Encoding]::ASCII)
+    $ps1Body = "# linkmycom PowerShell wrapper: forwards all arguments to linkmycom.py.`r`n& `"$(Get-ShimPath $python -PowerShell)`" `"`$PSScriptRoot\linkmycom.py`" @args`r`nexit `$LASTEXITCODE`r`n"
+    Write-Shim $ps1 $ps1Body
 }
 
 # Old tssh install: its folder stays on PATH and its tssh command now forwards here. The settings in ~/.tssh are shared.
 $old = Join-Path $env:LOCALAPPDATA "tssh"
 if (Test-Path (Join-Path $old "tssh.py")) {
-    $fwd = "@echo off`r`nset LINKMYCOM_INVOKED_AS=tssh`r`ncall `"$(Join-Path $dest 'linkmycom.cmd')`" %*`r`n"
-    [System.IO.File]::WriteAllText((Join-Path $old "tssh.cmd"), $fwd, [System.Text.Encoding]::ASCII)
+    Write-Shim (Join-Path $old "tssh.cmd") "@echo off`r`nset LINKMYCOM_INVOKED_AS=tssh`r`ncall `"%~dp0..\linkmycom\linkmycom.cmd`" %*`r`n"
     foreach ($stale in @("tssh.py", "tssh.ps1")) { Remove-Item (Join-Path $old $stale) -Force -ErrorAction SilentlyContinue }
     Write-Host "The old tssh command in $old now forwards to linkmycom."
 }

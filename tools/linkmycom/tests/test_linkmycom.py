@@ -333,7 +333,7 @@ class LegacyMigrationTests(unittest.TestCase):
         (bin_dir / "tssh.cmd").write_text("@echo off", encoding="utf-8")
         made = {p.relative_to(self.root).as_posix() for p in linkmycom.migrate_legacy_install(tower / "tssh.py")}
         self.assertTrue({"DeskTools/tower/linkmycom.ps1", "DeskTools/bin/linkmycom.cmd", "DeskTools/bin/lmc.cmd"} <= made)
-        self.assertIn(str(tower / "linkmycom.cmd"), (bin_dir / "lmc.cmd").read_text(encoding="utf-8"))
+        self.assertIn(r"%~dp0..\tower\linkmycom.cmd", (bin_dir / "lmc.cmd").read_text(encoding="utf-8"))
 
     def test_tower_updated_by_package_gets_bin_shims(self):
         # 타워 업데이터로 새 패키지를 받은 PC: tssh.py 는 이미 넘김 파일이고 bin 에는 tssh.cmd 만 있다.
@@ -346,9 +346,36 @@ class LegacyMigrationTests(unittest.TestCase):
         (bin_dir / "tssh.cmd").write_text("@echo off", encoding="utf-8")
         made = {p.name for p in linkmycom.ensure_tower_bin_shims(tower / "linkmycom.py")}
         self.assertEqual(made, {"linkmycom.cmd", "lmc.cmd"})
-        self.assertIn(str(tower / "linkmycom.cmd"), (bin_dir / "linkmycom.cmd").read_text(encoding="utf-8"))
+        self.assertIn(r"%~dp0..\tower\linkmycom.cmd", (bin_dir / "linkmycom.cmd").read_text(encoding="utf-8"))
         self.assertEqual(linkmycom.ensure_tower_bin_shims(tower / "linkmycom.py"), [])
         self.assertEqual(linkmycom.ensure_tower_bin_shims(self.root / "x" / "linkmycom.py"), [])
+
+    def test_shim_path_uses_env_vars_for_korean_user(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\김종은\AppData\Local",
+                                          "USERPROFILE": r"C:\Users\김종은"}):
+            py = r"C:\Users\김종은\AppData\Local\Programs\Python\Python312\python.exe"
+            self.assertEqual(linkmycom.shim_path(py), r"%LOCALAPPDATA%\Programs\Python\Python312\python.exe")
+            self.assertEqual(linkmycom.shim_path(py, ps=True), r"$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
+            self.assertTrue(linkmycom.python_shim(py).isascii())
+        self.assertEqual(linkmycom.shim_path(r"C:\Program Files\Python312\python.exe"), r"C:\Program Files\Python312\python.exe")
+
+    def test_repair_broken_shims(self):
+        d = self.root / "tssh"
+        d.mkdir()
+        (d / "linkmycom.py").write_text(self.src, encoding="utf-8")
+        # 옛 설치기가 한글 사용자 이름을 ASCII 로 써서 '???' 가 된 파일과 옛 tssh.cmd.
+        (d / "linkmycom.cmd").write_bytes(b'@echo off\r\n"C:\\Users\\???\\python.exe" "%~dp0linkmycom.py" %*\r\n')
+        (d / "tssh.cmd").write_bytes(b'@echo off\r\n"C:\\Users\\???\\python.exe" "%~dp0tssh.py" %*\r\n')
+        fixed = {p.name for p in linkmycom.repair_shims(d / "linkmycom.py")}
+        self.assertEqual(fixed, {"linkmycom.cmd", "tssh.cmd"})
+        self.assertNotIn(b"???", (d / "linkmycom.cmd").read_bytes())
+        self.assertIn(b"linkmycom.cmd", (d / "tssh.cmd").read_bytes())
+        self.assertEqual(linkmycom.repair_shims(d / "linkmycom.py"), [])  # 고친 뒤에는 그대로 둔다
+        # 패키지의 linkmycom.cmd 는 PATH 의 python 을 찾으므로 손대지 않는다.
+        (d / "linkmycom.cmd").write_bytes(b'@echo off\r\nwhere python >nul 2>nul\r\npython "%~dp0linkmycom.py" %*\r\n')
+        self.assertEqual(linkmycom.repair_shims(d / "linkmycom.py"), [])
 
     def test_posix_bin(self):
         d = self.root / "bin"

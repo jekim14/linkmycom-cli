@@ -50,7 +50,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -1555,10 +1555,32 @@ def shim_encoding() -> str:
 
 
 def write_shim(path: Path, body: str) -> None:
-    """배치 파일을 쓴다. 환경 변수로 못 바꾼 비ASCII 문자는 콘솔 코드 페이지로 쓴다."""
+    """실행 파일을 쓴다. .ps1 은 UTF-8 BOM(PowerShell 5.1·7 모두 읽음), .cmd 는 ASCII 또는 콘솔 코드 페이지."""
+    if path.suffix.lower() == ".ps1":
+        data = b"\xef\xbb\xbf" + body.encode("utf-8")
+    else:
+        data = body.encode("ascii" if body.isascii() else shim_encoding(), errors="replace")
     tmp = path.with_name(path.name + ".new")
-    tmp.write_bytes(body.encode("ascii" if body.isascii() else shim_encoding(), errors="replace"))
+    tmp.write_bytes(data)
     os.replace(tmp, path)
+
+
+TSSH_CMD_FORWARDER = '@echo off\r\nsetlocal\r\nset LINKMYCOM_INVOKED_AS=tssh\r\ncall "%~dp0linkmycom.cmd" %*\r\n'
+TSSH_PS1_FORWARDER = ('# tssh 는 linkmycom 으로 이름이 바뀌었다. 옆의 linkmycom 을 같은 인자로 실행한다.\r\n'
+                      '$env:LINKMYCOM_INVOKED_AS = "tssh"\r\n'
+                      'try { & (Join-Path $PSScriptRoot "linkmycom.cmd") @args } finally { Remove-Item Env:LINKMYCOM_INVOKED_AS -ErrorAction SilentlyContinue }\r\n'
+                      'exit $LASTEXITCODE\r\n')
+
+
+def broken_exe_path(path: Path) -> bool:
+    """실행 파일 안의 따옴표 친 .exe 경로가 깨졌거나 없으면 True. .exe 경로가 없으면(PATH 의 python 을 찾는 방식) False."""
+    raw = path.read_bytes()
+    text = raw[3:].decode("utf-8", errors="replace") if raw.startswith(b"\xef\xbb\xbf") else raw.decode(shim_encoding(), errors="replace")
+    m = re.search(r'"([^"]+\.exe)"', text)
+    if not m:
+        return False
+    exe = re.sub(r"\$env:(\w+)", r"%\1%", m.group(1))  # PowerShell 의 $env:VAR 도 %VAR% 로 펼쳐 확인한다
+    return "?" in exe or "�" in exe or not os.path.exists(os.path.expandvars(exe))
 
 
 def python_shim(py: str) -> str:
@@ -1566,22 +1588,26 @@ def python_shim(py: str) -> str:
 
 
 def repair_shims(here: Path) -> list[Path]:
-    """linkmycom.py 옆의 옛 tssh.cmd 와 파이썬 경로가 깨진 linkmycom.cmd 를 고친다. 고친 파일 목록을 돌려준다.
+    """linkmycom.py 옆의 옛 tssh.cmd·tssh.ps1 과 파이썬 경로가 깨진 linkmycom.cmd·linkmycom.ps1 을 고친다.
 
     옛 설치기는 파이썬 경로를 ASCII 로 써서 한글 사용자 이름이 '???'가 됐다. 그런 파일은 실행되지 않는다.
+    PowerShell 은 같은 이름이면 .ps1 을 먼저 고르므로 .ps1 도 고친다. 고친 파일 목록을 돌려준다.
     """
     if here.name != "linkmycom.py" or not here.with_name("linkmycom.cmd").exists():
         return []
     fixed: list[Path] = []
     cmd = here.with_name("linkmycom.cmd")
-    m = re.search(r'"([^"]+\.exe)"', cmd.read_bytes().decode(shim_encoding(), errors="replace"))
-    if m and ("?" in m.group(1) or "�" in m.group(1) or not os.path.exists(os.path.expandvars(m.group(1)))):
+    if broken_exe_path(cmd):
         write_shim(cmd, python_shim(sys.executable))
         fixed.append(cmd)
-    legacy = here.with_name("tssh.cmd")
-    if legacy.exists() and b"linkmycom" not in legacy.read_bytes().lower():
-        write_shim(legacy, '@echo off\r\nset LINKMYCOM_INVOKED_AS=tssh\r\ncall "%~dp0linkmycom.cmd" %*\r\n')
-        fixed.append(legacy)
+    ps1 = here.with_name("linkmycom.ps1")
+    if ps1.exists() and broken_exe_path(ps1):
+        write_shim(ps1, f'& "{shim_path(sys.executable, ps=True)}" "$PSScriptRoot\\linkmycom.py" @args\r\nexit $LASTEXITCODE\r\n')
+        fixed.append(ps1)
+    for legacy, body in ((here.with_name("tssh.cmd"), TSSH_CMD_FORWARDER), (here.with_name("tssh.ps1"), TSSH_PS1_FORWARDER)):
+        if legacy.exists() and b"linkmycom" not in legacy.read_bytes().lower():
+            write_shim(legacy, body)
+            fixed.append(legacy)
     return fixed
 
 
@@ -1589,17 +1615,21 @@ def ensure_tower_bin_shims(here: Path) -> list[Path]:
     """원클릭 설치기는 타워 폴더 옆 bin 에 tssh.cmd 만 두고 PATH 에 넣었다. 같은 자리에 linkmycom·lmc 도 둔다.
 
     타워 업데이터로 새 패키지를 받은 PC 는 옛 이름 파일이 이미 넘김 파일이라 옮기기가 일어나지 않으므로
-    타워 폴더의 linkmycom.py 가 실행될 때마다 확인한다. 이미 있으면 아무것도 하지 않는다.
+    타워 폴더의 linkmycom.py 가 실행될 때마다 확인한다. 옛 설치기·옛 코드가 한글 사용자 이름을 깨뜨린 절대 경로로
+    썼을 수 있으므로 내용이 기대와 다르면 다시 쓴다. 쓴 파일 목록을 돌려준다.
     """
     bin_dir = here.parent.parent / "bin"
-    target = here.with_name("linkmycom.cmd")
-    if here.parent.name.lower() != "tower" or not (bin_dir / "tssh.cmd").exists() or not target.exists():
+    tower = here.parent.name
+    if tower.lower() != "tower" or not (bin_dir / "tssh.cmd").exists() or not here.with_name("linkmycom.cmd").exists():
         return []
+    expected = {name: f'@echo off\r\ncall "%~dp0..\\{tower}\\linkmycom.cmd" %*\r\n' for name in ("linkmycom.cmd", "lmc.cmd")}
+    if here.with_name("tssh.cmd").exists():
+        expected["tssh.cmd"] = f'@echo off\r\ncall "%~dp0..\\{tower}\\tssh.cmd" %*\r\n'
     made: list[Path] = []
-    for name in ("linkmycom.cmd", "lmc.cmd"):
+    for name, body in expected.items():
         path = bin_dir / name
-        if not path.exists():
-            write_shim(path, f'@echo off\r\ncall "%~dp0..\\{here.parent.name}\\linkmycom.cmd" %*\r\n')
+        if not path.exists() or path.read_bytes() != body.encode("ascii"):
+            write_shim(path, body)
             made.append(path)
     return made
 
@@ -1610,7 +1640,7 @@ def migrate_legacy_install(here: Path) -> list[Path]:
     tssh update 가 옛 파일 자리에 이 코드를 받아 처음 실행될 때 한 번 일어난다. 소스 저장소 안에서는 하지 않는다.
     새로 만든 파일 목록을 돌려준다.
     """
-    if here.name not in LEGACY_NAMES or any((p / ".git").exists() for p in here.parents[:3]):
+    if here.name not in LEGACY_NAMES or any((p / ".git").exists() for p in tuple(here.parents)[:3]):
         return []
     src = here.read_text(encoding="utf-8")
     if is_forwarder(src):

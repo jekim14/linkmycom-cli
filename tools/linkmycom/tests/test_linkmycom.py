@@ -335,6 +335,34 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertTrue({"DeskTools/tower/linkmycom.ps1", "DeskTools/bin/linkmycom.cmd", "DeskTools/bin/lmc.cmd"} <= made)
         self.assertIn(r"%~dp0..\tower\linkmycom.cmd", (bin_dir / "lmc.cmd").read_text(encoding="utf-8"))
 
+    def test_broken_bin_shims_are_rewritten(self):
+        # 옛 설치기가 한글 사용자 이름을 '???'로 깨뜨린 절대 경로를 bin 에 썼어도 다시 쓴다.
+        tower = self.root / "DeskTools" / "tower"
+        bin_dir = self.root / "DeskTools" / "bin"
+        tower.mkdir(parents=True)
+        bin_dir.mkdir()
+        for name in ("linkmycom.py", "linkmycom.cmd", "tssh.cmd"):
+            (tower / name).write_text("x", encoding="utf-8")
+        for name in ("linkmycom.cmd", "lmc.cmd", "tssh.cmd"):
+            (bin_dir / name).write_bytes(b'@echo off\r\ncall "C:\\Users\\???\\AppData\\Local\\DeskTools\\tower\\linkmycom.cmd" %*\r\n')
+        made = {p.name for p in linkmycom.ensure_tower_bin_shims(tower / "linkmycom.py")}
+        self.assertEqual(made, {"linkmycom.cmd", "lmc.cmd", "tssh.cmd"})
+        self.assertIn(rb"%~dp0..\tower\tssh.cmd", (bin_dir / "tssh.cmd").read_bytes())
+        self.assertEqual(linkmycom.ensure_tower_bin_shims(tower / "linkmycom.py"), [])
+
+    def test_repair_powershell_wrappers(self):
+        d = self.root / "tsshps"
+        d.mkdir()
+        (d / "linkmycom.py").write_text(self.src, encoding="utf-8")
+        (d / "linkmycom.cmd").write_bytes(b'@echo off\r\nwhere python >nul 2>nul\r\n')
+        (d / "linkmycom.ps1").write_bytes(b'& "C:\\Users\\???\\python.exe" "$PSScriptRoot\\linkmycom.py" @args\r\n')
+        (d / "tssh.ps1").write_bytes(b'& "C:\\Users\\???\\python.exe" "$PSScriptRoot\\tssh.py" @args\r\n')
+        fixed = {p.name for p in linkmycom.repair_shims(d / "linkmycom.py")}
+        self.assertEqual(fixed, {"linkmycom.ps1", "tssh.ps1"})
+        self.assertTrue((d / "linkmycom.ps1").read_bytes().startswith(b"\xef\xbb\xbf"))
+        self.assertIn(b"linkmycom.cmd", (d / "tssh.ps1").read_bytes())
+        self.assertEqual(linkmycom.repair_shims(d / "linkmycom.py"), [])
+
     def test_tower_updated_by_package_gets_bin_shims(self):
         # 타워 업데이터로 새 패키지를 받은 PC: tssh.py 는 이미 넘김 파일이고 bin 에는 tssh.cmd 만 있다.
         tower = self.root / "DeskTools" / "tower"
@@ -410,8 +438,14 @@ class LegacyMigrationTests(unittest.TestCase):
         d.mkdir()
         (d / "linkmycom.py").write_text(self.src, encoding="utf-8")
         (d / "tssh.py").write_text(linkmycom.forwarder_source("linkmycom.py"), encoding="utf-8")
+        import os
+        home = self.root / "home"
+        home.mkdir()
+        # 넘김 파일은 옛 이름 안내 상태를 ~/.tssh 에 쓴다. 개발자의 실제 홈을 건드리지 않게 홈을 바꾼다.
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
         out = subprocess.run([sys.executable, str(d / "tssh.py"), "version"], capture_output=True, text=True,
-                             encoding="utf-8", timeout=60)
+                             encoding="utf-8", timeout=60, env=env)
+        self.assertTrue((home / ".tssh").exists())
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.strip(), f"linkmycom {linkmycom.__version__}")
 

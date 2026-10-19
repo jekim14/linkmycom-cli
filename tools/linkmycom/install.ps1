@@ -52,8 +52,14 @@ function Get-ShimPath([string]$Path, [switch]$PowerShell) {
     }
     return $Path
 }
-$shimEncoding = [System.Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
-function Write-Shim([string]$Path, [string]$Body) { [System.IO.File]::WriteAllText($Path, $Body, $shimEncoding) }
+# cmd.exe reads batch files in the system OEM code page (cp949 on Korean Windows), not the user format culture.
+$oemCodePage = [int](Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage" -Name OEMCP).OEMCP
+$shimEncoding = [System.Text.Encoding]::GetEncoding($oemCodePage)
+function Write-Shim([string]$Path, [string]$Body) {
+    # .ps1 files get UTF-8 with BOM, which both Windows PowerShell 5.1 and PowerShell 7 read correctly.
+    $enc = if ($Path -like "*.ps1") { New-Object System.Text.UTF8Encoding $true } else { $shimEncoding }
+    [System.IO.File]::WriteAllText($Path, $Body, $enc)
+}
 
 # cmd.exe shims: linkmycom and its short name lmc.
 Write-Shim (Join-Path $dest "linkmycom.cmd") "@echo off`r`n`"$(Get-ShimPath $python)`" `"%~dp0linkmycom.py`" %*`r`n"
@@ -73,10 +79,13 @@ if ($policy -in @("Restricted", "AllSigned")) {
 
 # Old tssh install: its folder stays on PATH and its tssh command now forwards here. The settings in ~/.tssh are shared.
 $old = Join-Path $env:LOCALAPPDATA "tssh"
-if (Test-Path (Join-Path $old "tssh.py")) {
-    Write-Shim (Join-Path $old "tssh.cmd") "@echo off`r`nset LINKMYCOM_INVOKED_AS=tssh`r`ncall `"%~dp0..\linkmycom\linkmycom.cmd`" %*`r`n"
-    foreach ($stale in @("tssh.py", "tssh.ps1")) { Remove-Item (Join-Path $old $stale) -Force -ErrorAction SilentlyContinue }
-    Write-Host "The old tssh command in $old now forwards to linkmycom."
+if ((Test-Path (Join-Path $old "tssh.py")) -or (Test-Path (Join-Path $old "linkmycom.py"))) {
+    # A tssh that already self-migrated also has linkmycom/lmc here. This folder is earlier on PATH, so every command
+    # here must forward to the new install, otherwise the old copy keeps shadowing it.
+    Write-Shim (Join-Path $old "tssh.cmd") "@echo off`r`nsetlocal`r`nset LINKMYCOM_INVOKED_AS=tssh`r`ncall `"%~dp0..\linkmycom\linkmycom.cmd`" %*`r`n"
+    foreach ($name in @("linkmycom.cmd", "lmc.cmd")) { Write-Shim (Join-Path $old $name) "@echo off`r`ncall `"%~dp0..\linkmycom\linkmycom.cmd`" %*`r`n" }
+    foreach ($stale in @("tssh.py", "tssh.ps1", "linkmycom.py", "linkmycom.ps1")) { Remove-Item (Join-Path $old $stale) -Force -ErrorAction SilentlyContinue }
+    Write-Host "The old commands in $old (tssh, linkmycom, lmc) now forward to $dest."
 }
 
 if (-not $NoPath) {

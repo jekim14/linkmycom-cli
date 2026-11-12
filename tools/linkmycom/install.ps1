@@ -31,7 +31,7 @@ foreach ($name in @("python", "python3", "py")) {
 }
 if (-not $python) { throw "Python 3 was not found. Install it from https://www.python.org and run this again." }
 $ver = & $python -c "import sys; print('%d.%d' % sys.version_info[:2])"
-if ([version]$ver -lt [version]"3.10") { throw "Python 3.10 or newer is required (found $ver at $python)." }
+if ([version]$ver -lt [version]"3.9") { throw "Python 3.9 or newer is required (found $ver at $python)." }
 
 $dest = Join-Path $env:LOCALAPPDATA "linkmycom"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null

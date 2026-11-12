@@ -11,6 +11,10 @@ if ! command -v python3 >/dev/null 2>&1; then
     echo "python3 가 필요합니다." >&2
     exit 1
 fi
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+    echo "Python 3.9 이상이 필요합니다(지금: $(python3 -V 2>&1))." >&2
+    exit 1
+fi
 here=""
 if [ -n "${0:-}" ] && [ -f "$0" ]; then
     here="$(cd "$(dirname "$0")" && pwd)"

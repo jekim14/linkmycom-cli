@@ -17,12 +17,17 @@
   linkmycom resolve <이름>            user@주소 형태로 출력 (scp 등에 활용)
   linkmycom export                    ~/.ssh/config 에 linkmycom 관리 블록 기록
   linkmycom config [키=값 ...]        전역 설정 보기/변경 (default_user, use_magicdns, update_repo, auto_update_check)
-  linkmycom update [--check]          새 버전 확인/적용
+  linkmycom update [--check]          거울의 최신 릴리스를 서명 확인 뒤 적용(--check: 확인만)
   linkmycom version                   버전 출력
+  linkmycom help [명령]               도움말(명령을 주면 그 명령만)
+  linkmycom completion powershell|bash|zsh   셸 자동 완성 스크립트 출력(호스트 이름은 list 캐시)
+  linkmycom doctor [이름]             이 PC(또는 그 PC)의 Tailscale·sshd·방화벽·authorized_keys·버전 점검표
 
-  linkmycom setup [--no-server] [--no-keys]   이 컴퓨터를 SSH 서버로 켜고(Tailscale 대역만 허용) 공개키를 교환
-  linkmycom keys [show|refresh]       내 공개키 보기 / 저장소의 공개키 목록을 받아 authorized_keys 갱신
-  linkmycom keys publish [--collect]  (관리 PC) 각 컴퓨터의 공개키를 모아 저장소에 게시
+  linkmycom setup [--no-server] [--no-keys] [--no-schedule]
+                                 이 컴퓨터를 SSH 서버로 켜고(Tailscale 대역만 허용) 공개키를 교환하고
+                                 하루 한 번 'keys refresh' 를 예약
+  linkmycom keys [show|refresh [--force]]   내 공개키 보기 / 서명된 공개키 목록을 받아 authorized_keys 갱신
+  linkmycom keys publish [--collect]  (관리 PC) 각 컴퓨터의 공개키를 모아 서명해 거울 저장소에 게시
 
   linkmycom screen <이름> [--gather]  LinkMyCom 화면공유 앱으로 그 PC 화면 보기 창을 연다(--gather: 먼저 그 PC 의 창을 주 모니터로 모음)
                                  linkmycom set <이름> screen=<다른 이름> 으로 화면용 접속 대상을 따로 지정
@@ -50,7 +55,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -58,8 +63,20 @@ DEFAULT_REPO = "jekim14/linkmycom-cli"
 # 설정 파일에 남아 있어도 raw 주소로 받을 수 없는 저장소 이름. 읽을 때 지워 기본 저장소를 쓰게 한다.
 LEGACY_REPOS = {"jekim14/desktools", "jekim14/linkmycom", "jekim14/tssh"}
 DEFAULT_UPDATE_REF = "HEAD"
-DEFAULT_UPDATE_PATH = "tools/linkmycom/linkmycom.py"
 DEFAULT_KEYS_PATH = "tools/linkmycom/authorized_keys"
+# 공개키 목록과 CLI 릴리스 자산의 서명. 관리 PC(jekimlabtop)의 ~/.ssh/linkmycom-signing 으로 'ssh-keygen -Y sign' 한다.
+# 받는 쪽은 아래 공개키 하나만 믿는다(allowed_signers 한 줄: "<SIGNER_IDENTITY> <SIGNING_PUBKEY>").
+SIGNING_PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGWKhtP9dXCC5mljTV/5DOf42NzaQ7EUHRAo9B+bX0+s"
+SIGNER_IDENTITY = "linkmycom"
+KEYS_SIG_NAMESPACE = "linkmycom-keys"
+CLI_SIG_NAMESPACE = "linkmycom-keys"
+SIG_SUFFIX = ".sig"
+# 거울 릴리스 자산 이름. linkmycom.py.sha256 은 "<16진 해시>  linkmycom.py" 한 줄(있으면 대조, 없어도 서명이 맞으면 진행).
+CLI_ASSET = "linkmycom.py"
+CLI_SIG_ASSET = CLI_ASSET + SIG_SUFFIX
+CLI_SHA_ASSET = CLI_ASSET + ".sha256"
+# keys publish 는 origin 이 이 거울일 때만 한다(Publish-Cli.ps1 과 같은 규칙).
+MIRROR_ORIGIN_RE = re.compile(r"github\.com[/:]jekim14/(linkmycom-cli|tssh)(\.git)?/?$")
 CONFIG_DIR = Path.home() / ".tssh"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 STATE_PATH = CONFIG_DIR / "state.json"
@@ -68,9 +85,11 @@ MANAGED_BEGIN = "# >>> tssh managed (tssh export 가 생성, 직접 고치지 �
 MANAGED_END = "# <<< tssh managed <<<"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,253}$")
 SUBCOMMANDS = {"list", "ls", "set", "unset", "resolve", "export", "config", "update", "version", "help", "last",
-               "setup", "keys", "display", "screen", "password"}
+               "setup", "keys", "display", "screen", "password", "doctor", "completion"}
+HOSTS_CACHE_PATH = CONFIG_DIR / "hosts.txt"
 SSH_DIR = Path.home() / ".ssh"
 LOCAL_KEY = SSH_DIR / "id_ed25519"
+SIGNING_KEY = SSH_DIR / "linkmycom-signing"
 AUTHORIZED_KEYS = SSH_DIR / "authorized_keys"
 KEYS_BEGIN = "# >>> tssh keys (tssh setup 이 관리, 직접 고치지 마세요) >>>"
 KEYS_END = "# <<< tssh keys <<<"
@@ -469,6 +488,22 @@ def ssh_bin() -> str:
 SSH_OPTS_WITH_VALUE = set("bcDEeFIiJLlmOopQRSWwBP")
 
 
+def split_args(text: str) -> list[str]:
+    """'args=' 값을 셸처럼 나눈다. 따옴표로 묶은 공백은 한 인자로 둔다.
+
+    Windows 에서는 역슬래시를 이스케이프로 보지 않는다(C:\\Users\\x\\key 같은 경로를 그대로 둔다).
+    따옴표가 짝이 맞지 않으면 ValueError.
+    """
+    import shlex
+
+    lex = shlex.shlex(text, posix=True)
+    lex.whitespace_split = True
+    lex.commenters = ""
+    if os.name == "nt":
+        lex.escape = ""
+    return list(lex)
+
+
 def split_ssh_args(args: list[str]) -> tuple[list[str], list[str]]:
     """ssh 인자를 (호스트 앞에 둘 옵션, 호스트 뒤에 둘 원격 명령) 으로 나눈다."""
     options: list[str] = []
@@ -513,7 +548,10 @@ def build_ssh_cmd(
         cmd += ["-i", os.path.expanduser(str(settings["key"]))]
     args = settings.get("args") or []
     if isinstance(args, str):
-        args = args.split()
+        try:
+            args = split_args(args)
+        except ValueError:
+            args = args.split()
     cmd += list(args)
     options, remote = split_ssh_args(list(extra or []))
     cmd += options
@@ -743,13 +781,99 @@ def fetch_repo_file(repo: str, ref: str, path: str, timeout: float = 5.0) -> byt
     raise last if last else RuntimeError("받을 주소가 없습니다.")
 
 
-def fetch_latest(repo: str, timeout: float = 5.0, ref: str = DEFAULT_UPDATE_REF,
-                 path: str = DEFAULT_UPDATE_PATH) -> tuple[str, str]:
-    """(참조 이름, linkmycom.py 원문) 을 돌려준다. 배포 저장소 기본 브랜치의 파일을 그대로 받는다. 실패하면 예외."""
-    src = fetch_repo_file(repo, ref, path, timeout).decode("utf-8")
-    if not version_in_source(src):
-        raise RuntimeError(f"받은 파일에 버전이 없습니다: {repo}/{ref}/{path}")
-    return ref, src
+def find_keygen() -> str | None:
+    found = shutil.which("ssh-keygen")
+    if not found and os.name == "nt":
+        cand = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "OpenSSH", "ssh-keygen.exe")
+        if os.path.exists(cand):
+            found = cand
+    return found
+
+
+def verify_signature(data: bytes, sig: bytes, namespace: str, signer: str | None = None) -> tuple[bool, str]:
+    """data 가 signer(기본 SIGNING_PUBKEY) 의 namespace 서명인지 'ssh-keygen -Y verify' 로 확인한다.
+
+    die() 를 부르지 않는다(백그라운드 스레드에서도 쓴다). (성공 여부, 실패 사유) 를 돌려준다.
+    받은 바이트 그대로 검증해야 하므로 data 는 디코드하지 않은 원본이어야 한다.
+    """
+    exe = find_keygen()
+    if not exe:
+        return False, "ssh-keygen 을 찾지 못했습니다(OpenSSH 클라이언트 필요)"
+    if not sig or b"BEGIN SSH SIGNATURE" not in sig:
+        return False, "서명 파일이 비었거나 형식이 아닙니다"
+    signer = (signer or SIGNING_PUBKEY).strip()
+    with tempfile.TemporaryDirectory(prefix="linkmycom-verify-") as d:
+        allowed = Path(d) / "allowed_signers"
+        sig_path = Path(d) / "data.sig"
+        allowed.write_bytes(f"{SIGNER_IDENTITY} {signer}\n".encode("ascii", "replace"))
+        sig_path.write_bytes(sig)
+        try:
+            r = subprocess.run([exe, "-Y", "verify", "-f", str(allowed), "-I", SIGNER_IDENTITY, "-n", namespace,
+                                "-s", str(sig_path)], input=data, capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return False, f"ssh-keygen 을 실행하지 못했습니다: {e}"
+    if r.returncode == 0:
+        return True, ""
+    msg = (r.stderr + r.stdout).decode("utf-8", "replace").strip()
+    low = msg.lower()
+    if "unknown option" in low or "illegal option" in low or "usage:" in low:
+        return False, "이 ssh-keygen 은 서명 검증(-Y verify)을 지원하지 않습니다(OpenSSH 8.1 이상 필요)"
+    return False, "서명이 맞지 않습니다" + (f" ({msg.splitlines()[-1]})" if msg else "")
+
+
+def latest_release(repo: str, timeout: float = 10.0) -> dict:
+    """거울 저장소의 최신 GitHub 릴리스(비인증 API). 실패하면 예외."""
+    data = http_get(f"https://api.github.com/repos/{repo}/releases/latest", timeout,
+                    {"Accept": "application/vnd.github+json"})
+    rel = json.loads(data.decode("utf-8"))
+    if not isinstance(rel, dict) or not rel.get("tag_name"):
+        raise RuntimeError(f"{repo} 의 최신 릴리스 정보를 읽지 못했습니다.")
+    return rel
+
+
+def release_asset_url(rel: dict, name: str) -> str | None:
+    for asset in rel.get("assets") or []:
+        if isinstance(asset, dict) and asset.get("name") == name:
+            return asset.get("browser_download_url")
+    return None
+
+
+def check_release_source(src: bytes, sig: bytes | None, sha_text: str | None = None,
+                         signer: str | None = None) -> str:
+    """받은 linkmycom.py 를 서명 → sha256 → 문법 → 버전 순으로 확인하고 버전을 돌려준다. 하나라도 어긋나면 RuntimeError."""
+    import hashlib
+
+    if not sig:
+        raise RuntimeError(f"릴리스에 서명 파일 {CLI_SIG_ASSET} 이 없어 교체하지 않습니다.")
+    ok, reason = verify_signature(src, sig, CLI_SIG_NAMESPACE, signer)
+    if not ok:
+        raise RuntimeError(f"{CLI_ASSET} 서명 확인 실패: {reason}. 교체하지 않습니다.")
+    if sha_text:
+        expected = (sha_text.strip().split() or [""])[0].lower()
+        actual = hashlib.sha256(src).hexdigest()
+        if expected != actual:
+            raise RuntimeError(f"{CLI_ASSET} SHA256 이 {CLI_SHA_ASSET} 과 다릅니다. 교체하지 않습니다.")
+    try:
+        compile(src, CLI_ASSET, "exec")
+    except (SyntaxError, ValueError) as e:
+        raise RuntimeError(f"받은 {CLI_ASSET} 의 문법이 맞지 않습니다: {e}") from e
+    version = version_in_source(src.decode("utf-8", "replace"))
+    if not version:
+        raise RuntimeError(f"받은 {CLI_ASSET} 에 버전이 없습니다.")
+    return version
+
+
+def fetch_release_source(repo: str, rel: dict, timeout: float = 30.0) -> tuple[bytes, str]:
+    """릴리스 자산 linkmycom.py·.sig·.sha256 을 받아 확인한 (원본 바이트, 버전) 을 돌려준다."""
+    py_url = release_asset_url(rel, CLI_ASSET)
+    if not py_url:
+        raise RuntimeError(f"{repo} 릴리스 {rel.get('tag_name')} 에 {CLI_ASSET} 자산이 없습니다.")
+    src = http_get(py_url, timeout)
+    sig_url = release_asset_url(rel, CLI_SIG_ASSET)
+    sig = http_get(sig_url, timeout) if sig_url else None
+    sha_url = release_asset_url(rel, CLI_SHA_ASSET)
+    sha_text = http_get(sha_url, timeout).decode("utf-8", "replace") if sha_url else None
+    return src, check_release_source(src, sig, sha_text)
 
 
 def version_in_source(src: str) -> str:
@@ -757,10 +881,10 @@ def version_in_source(src: str) -> str:
     return m.group(1) if m else ""
 
 
-def write_self(target: Path, src: str) -> None:
-    """새 소스를 임시 파일에 쓰고 원본의 실행 권한을 그대로 옮긴 뒤 원자적으로 교체한다."""
+def write_self(target: Path, src: str | bytes) -> None:
+    """새 소스를 임시 파일에 쓰고 원본의 실행 권한을 그대로 옮긴 뒤 원자적으로 교체한다. 받은 바이트를 그대로 쓴다."""
     tmp = target.with_name(target.name + ".new")
-    tmp.write_text(src, encoding="utf-8")
+    tmp.write_bytes(src if isinstance(src, bytes) else src.encode("utf-8"))
     try:
         shutil.copymode(target, tmp)
     except OSError:
@@ -779,22 +903,27 @@ def update_target(here: Path) -> Path:
 
 def cmd_update(cfg: dict, check_only: bool) -> int:
     repo = cfg.get("update_repo") or DEFAULT_REPO
-    ref = cfg.get("update_ref") or DEFAULT_UPDATE_REF
-    print(f"저장소 {repo} ({ref}) 에서 최신 linkmycom 를 확인합니다...")
+    print(f"저장소 {repo} 의 최신 릴리스를 확인합니다...")
     try:
-        tag, src = fetch_latest(repo, timeout=15, ref=ref)
+        rel = latest_release(repo, timeout=15)
     except Exception as e:  # noqa: BLE001
-        die(f"최신 파일을 가져오지 못했습니다: {e}\n다른 저장소를 쓴다면 'linkmycom config update_repo=<owner/repo>' 로 지정하세요.")
-    remote = version_in_source(src)
-    if not remote:
-        die("받은 파일에서 버전을 찾지 못했습니다.")
-    if parse_version(remote) <= parse_version(__version__):
-        print(f"이미 최신입니다 (설치 {__version__}, 릴리스 {remote}).")
+        die(f"최신 릴리스를 가져오지 못했습니다: {e}\n다른 저장소를 쓴다면 'linkmycom config update_repo=<owner/repo>' 로 지정하세요.")
+    tag = rel["tag_name"]
+    if parse_version(tag) <= parse_version(__version__):
+        print(f"이미 최신입니다 (설치 {__version__}, 릴리스 {tag}).")
         return 0
-    print(f"새 버전 {remote} (태그 {tag}) 이(가) 있습니다. 현재 {__version__}.")
+    print(f"새 릴리스 {tag} 이(가) 있습니다. 현재 {__version__}.")
     if check_only:
         print("적용하려면: linkmycom update")
         return 0
+    try:
+        src, remote = fetch_release_source(repo, rel)
+    except Exception as e:  # noqa: BLE001
+        die(f"{e}")
+    if parse_version(remote) <= parse_version(__version__):
+        print(f"이미 최신입니다 (설치 {__version__}, 받은 파일 {remote}).")
+        return 0
+    print(f"서명 확인 완료({SIGNER_IDENTITY}, {CLI_SIG_NAMESPACE}).")
     target = update_target(Path(__file__).resolve())
     write_self(target, src)
     state = load_json(STATE_PATH)
@@ -821,17 +950,15 @@ def background_update_check(cfg: dict, notice: list[str]) -> threading.Thread | 
         return None
 
     def work() -> None:
-        st = load_json(STATE_PATH)
-        st["last_update_check"] = datetime.now(timezone.utc).isoformat()
-        if st.get("setup_done"):
+        if state.get("setup_done"):
             try:
-                refresh_keys(cfg, quiet=True)
+                refresh_keys(cfg, quiet=True)  # 상태 파일에 갱신 기록을 남기므로 아래에서 다시 읽는다.
             except Exception:  # noqa: BLE001
                 pass
+        st = load_json(STATE_PATH)
+        st["last_update_check"] = datetime.now(timezone.utc).isoformat()
         try:
-            tag, src = fetch_latest(cfg.get("update_repo") or DEFAULT_REPO, timeout=4,
-                                    ref=cfg.get("update_ref") or DEFAULT_UPDATE_REF)
-            remote = version_in_source(src)
+            remote = latest_release(cfg.get("update_repo") or DEFAULT_REPO, timeout=4)["tag_name"].lstrip("v")
             if remote and parse_version(remote) > parse_version(__version__):
                 st["update_available"] = remote
                 notice.append(f"새 버전 {remote} 이(가) 있습니다. 'linkmycom update' 로 적용하세요.")
@@ -873,11 +1000,7 @@ def strip_block(text: str, begin: str, end: str) -> str:
 
 
 def keygen_bin() -> str:
-    found = shutil.which("ssh-keygen")
-    if not found and os.name == "nt":
-        cand = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "OpenSSH", "ssh-keygen.exe")
-        if os.path.exists(cand):
-            found = cand
+    found = find_keygen()
     if not found:
         die("ssh-keygen 을 찾지 못했습니다. OpenSSH 클라이언트를 설치하세요.")
     return found
@@ -907,44 +1030,141 @@ def merge_authorized_keys(existing: str, keys: list[str]) -> tuple[str, int]:
     return replace_managed_block(existing, block, KEYS_BEGIN, KEYS_END), len(managed)
 
 
-def install_authorized_keys(keys: list[str]) -> int:
+def managed_keys_in(text: str) -> list[str]:
+    """authorized_keys 내용에서 linkmycom 관리 블록 안의 키만 돌려준다."""
+    m = re.search(re.escape(KEYS_BEGIN) + r"(.*?)" + re.escape(KEYS_END), text, re.S)
+    return parse_keys(m.group(1)) if m else []
+
+
+def keys_shrink_reason(old_count: int, received: int, new_count: int) -> str | None:
+    """받은 목록을 적용하면 안 되는 이유. 괜찮으면 None.
+
+    HTML 오류 페이지나 잘린 파일을 받아 키가 한꺼번에 지워지는 사고를 막는다. 빈 목록은 항상 거부하고,
+    관리 블록의 키가 절반 이하로 줄면 거부한다(처음 등록할 때처럼 기존 블록이 비었으면 통과).
+    """
+    if received == 0:
+        return "받은 목록에 공개키가 하나도 없습니다"
+    if old_count > 0 and new_count * 2 <= old_count:
+        return f"관리 블록의 공개키가 {old_count}개에서 {new_count}개로 절반 이하로 줄어듭니다"
+    return None
+
+
+class KeysRefused(RuntimeError):
+    """받은 공개키 목록이 비었거나 크게 줄어 적용하지 않았다."""
+
+
+def install_authorized_keys(keys: list[str], received: int | None = None, force: bool = False) -> int:
+    """관리 블록에 keys 를 넣는다. 임시 파일에 쓴 뒤 교체한다. 목록이 비었거나 절반 이하로 줄면 KeysRefused."""
     try:
-        existing = AUTHORIZED_KEYS.read_text(encoding="utf-8")
+        existing = AUTHORIZED_KEYS.read_bytes().decode("utf-8")
     except FileNotFoundError:
         existing = ""
     new_text, count = merge_authorized_keys(existing, keys)
+    received = len(keys) if received is None else received
+    reason = keys_shrink_reason(len(managed_keys_in(existing)), received, count)
+    if reason and (received == 0 or not force):
+        raise KeysRefused(reason)
     if new_text != existing:
         SSH_DIR.mkdir(parents=True, exist_ok=True)
-        AUTHORIZED_KEYS.write_text(new_text, encoding="utf-8")
         if os.name != "nt":
             os.chmod(SSH_DIR, 0o700)
-            os.chmod(AUTHORIZED_KEYS, 0o600)
+        replace_keeping_acl(AUTHORIZED_KEYS, new_text)
     return count
+
+
+def replace_keeping_acl(path: Path, text: str) -> None:
+    """원자적으로 교체한다. Windows 는 ReplaceFileW 로 기존 파일의 ACL·소유자를 그대로 둔다.
+
+    os.replace 는 새 파일의 ACL 을 폴더에서 물려받아, Add-SshUser 가 상속을 끊고 지정한 권한이 사라진다.
+    """
+    if os.name != "nt" or not path.exists():
+        replace_text(path, text, 0o600 if os.name != "nt" else None)
+        return
+    import ctypes
+
+    tmp = path.with_name(path.name + ".new")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    if not k32.ReplaceFileW(str(path), str(tmp), None, 0, None, None):
+        os.replace(tmp, path)  # ReplaceFileW 를 못 쓰면(다른 볼륨 등) 원자적 교체만이라도 한다.
+
+
+def keys_sources(cfg: dict) -> list[tuple[str, dict]]:
+    """공개키 목록을 받을 주소 목록. 서명은 각 주소 뒤에 .sig 를 붙여 같은 곳에서 받는다."""
+    if cfg.get("keys_url"):
+        return [(cfg["keys_url"], {})]
+    return repo_file_urls(cfg.get("update_repo") or DEFAULT_REPO, cfg.get("update_ref") or DEFAULT_UPDATE_REF,
+                          DEFAULT_KEYS_PATH)
+
+
+def sig_url_for(url: str) -> str:
+    """목록 주소에 대응하는 서명 주소. API 주소의 ?ref= 앞에 .sig 를 넣는다."""
+    base, sep, query = url.partition("?")
+    return base + SIG_SUFFIX + sep + query
 
 
 def fetch_remote_keys(cfg: dict, timeout: float = 10.0) -> list[str]:
-    if cfg.get("keys_url"):
-        data = http_get(cfg["keys_url"], timeout)
-    else:
-        data = fetch_repo_file(cfg.get("update_repo") or DEFAULT_REPO, cfg.get("update_ref") or DEFAULT_UPDATE_REF,
-                               DEFAULT_KEYS_PATH, timeout)
-    return parse_keys(data.decode("utf-8", "replace"))
+    """서명이 맞는 공개키 목록을 받는다. 목록과 서명은 같은 주소에서 받고(API·raw 캐시가 섞이지 않게), 받은 바이트 그대로 검증한다.
+
+    keys_url 로 다른 목록을 쓰면 그 주소 뒤 .sig 를 받아 keys_signer(없으면 내장 공개키)로 검증한다. 모두 실패하면 예외.
+    """
+    errors: list[str] = []
+    for url, headers in keys_sources(cfg):
+        try:
+            data = http_get(url, timeout, headers)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{url}: {e}")
+            continue
+        try:
+            sig = http_get(sig_url_for(url), timeout, headers)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{sig_url_for(url)}: 서명 파일을 받지 못함({e})")
+            continue
+        ok, reason = verify_signature(data, sig, KEYS_SIG_NAMESPACE, cfg.get("keys_signer"))
+        if ok:
+            return parse_keys(data.decode("utf-8", "replace"))
+        errors.append(f"{url}: {reason}")
+    raise RuntimeError("서명이 확인된 공개키 목록을 받지 못했습니다. " + " / ".join(errors))
 
 
-def refresh_keys(cfg: dict, quiet: bool = False) -> int:
-    """저장소의 공개키 목록을 받아 authorized_keys 관리 블록을 갱신한다. 실패하면 -1."""
+def refresh_keys(cfg: dict, quiet: bool = False, force: bool = False) -> int:
+    """서명된 공개키 목록을 받아 authorized_keys 관리 블록을 갱신한다. 실패하거나 거부하면 -1.
+
+    force 는 '절반 이하로 줄어듦' 만 넘긴다(키를 일부러 많이 뺐을 때). 빈 목록은 force 로도 적용하지 않는다.
+    """
+    state = load_json(STATE_PATH)
     try:
-        keys = fetch_remote_keys(cfg)
-    except Exception as e:  # noqa: BLE001
+        received = fetch_remote_keys(cfg)
+        local = ensure_local_key() if LOCAL_KEY.exists() else ""
+        keys = [k for k in received if k != local]
+        count = install_authorized_keys(keys, received=len(received), force=force)
+    except KeysRefused as e:
+        state["last_keys_error"] = f"{datetime.now(timezone.utc).isoformat()} {e}"
+        _save_state_quietly(state)
         if not quiet:
-            warn(f"공개키 목록을 받지 못했습니다 ({keys_url(cfg)}): {e}")
+            warn(f"authorized_keys 를 바꾸지 않았습니다: {e}. 목록이 맞다면 'linkmycom keys refresh --force'.")
         return -1
-    local = ensure_local_key() if LOCAL_KEY.exists() else ""
-    keys = [k for k in keys if k != local]
-    count = install_authorized_keys(keys)
+    except Exception as e:  # noqa: BLE001
+        state["last_keys_error"] = f"{datetime.now(timezone.utc).isoformat()} {e}"
+        _save_state_quietly(state)
+        if not quiet:
+            warn(f"공개키 목록을 적용하지 못했습니다 ({keys_url(cfg)}): {e}")
+        return -1
+    state["last_keys_refresh"] = datetime.now(timezone.utc).isoformat()
+    state["last_keys_count"] = count
+    state.pop("last_keys_error", None)
+    _save_state_quietly(state)
     if not quiet:
-        print(f"authorized_keys 관리 블록에 공개키 {count}개를 등록했습니다 ({AUTHORIZED_KEYS}).")
+        print(f"서명 확인 후 authorized_keys 관리 블록에 공개키 {count}개를 등록했습니다 ({AUTHORIZED_KEYS}).")
     return count
+
+
+def _save_state_quietly(state: dict) -> None:
+    try:
+        save_json(STATE_PATH, state)
+    except OSError:
+        pass
 
 
 def port_open(host: str, port: int, timeout: float = 1.5) -> bool:
@@ -1006,9 +1226,22 @@ try {
   New-Item -Path 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null
   $pwsh = (Get-Command powershell.exe).Source
   Set-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value $pwsh
-  Get-NetFirewallRule -DisplayName 'OpenSSH*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-  Get-NetFirewallRule -Name 'tssh-OpenSSH' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-  New-NetFirewallRule -Name 'tssh-OpenSSH' -DisplayName 'OpenSSH Server (Tailscale only, tssh)' -Direction Inbound -Protocol TCP -LocalPort 22 -RemoteAddress @('100.64.0.0/10','fd7a:115c:a1e0::/48') -Action Allow | Out-Null
+  # 100.64.0.0/10 overlaps carrier-grade NAT, so also bind the rule to the Tailscale interface when it exists.
+  # Create the new rule first, then drop the old ones, so SSH is never left without an allow rule.
+  $fw = @{ Direction = 'Inbound'; Protocol = 'TCP'; LocalPort = 22; RemoteAddress = @('100.64.0.0/10','fd7a:115c:a1e0::/48'); Action = 'Allow' }
+  $tsIf = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like 'Tailscale*' } | Select-Object -First 1
+  $old = Get-NetFirewallRule -Name 'tssh-OpenSSH' -ErrorAction SilentlyContinue
+  Get-NetFirewallRule -Name 'tssh-OpenSSH-next' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  if ($tsIf -or -not $old) {
+    if ($tsIf) { $fw.InterfaceAlias = $tsIf.Name; Write-Host "SSH rule bound to interface '$($tsIf.Name)'." }
+    else { Write-Host 'Tailscale interface not found; the SSH rule allows Tailscale addresses on any interface.' }
+    New-NetFirewallRule -Name 'tssh-OpenSSH-next' -DisplayName 'OpenSSH Server (Tailscale only, tssh)' @fw | Out-Null
+    Get-NetFirewallRule -DisplayName 'OpenSSH*' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'tssh-OpenSSH-next' } | Remove-NetFirewallRule
+    Rename-NetFirewallRule -Name 'tssh-OpenSSH-next' -NewName 'tssh-OpenSSH'
+  } else {
+    Write-Host 'Tailscale interface not found; the existing tssh-OpenSSH rule is left unchanged.'
+    Get-NetFirewallRule -DisplayName 'OpenSSH*' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'tssh-OpenSSH' } | Remove-NetFirewallRule
+  }
   Restart-Service sshd
   Write-Host 'TSSH_SETUP_OK'
 } catch {
@@ -1094,6 +1327,113 @@ def setup_server_linux() -> bool:
     return port_open("127.0.0.1", 22, 3.0)
 
 
+# 하루 한 번 'linkmycom keys refresh --quiet' 예약. 이름은 고정이라 setup 을 다시 해도 하나만 남는다.
+SCHEDULE_TASK_NAME = "LinkMyCom-KeysRefresh"
+LAUNCHD_LABEL = "com.linkmycom.keys-refresh"
+SYSTEMD_UNIT = "linkmycom-keys"
+
+
+def refresh_command(python: str, script: str) -> list[str]:
+    return [python, script, "keys", "refresh", "--quiet"]
+
+
+def ps_quote(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def schedule_windows_ps(python: str, script: str) -> str:
+    """현재 사용자로 매일 도는 예약 작업을 등록하는 PowerShell(display 의 예약 작업과 같은 cmdlet). 관리자 권한은 쓰지 않는다.
+
+    한글 경로가 깨지지 않도록 파일로 쓰지 않고 -EncodedCommand(UTF-16) 로 넘긴다.
+    """
+    arg = subprocess.list2cmdline(refresh_command(python, script)[1:])
+    return "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        f"$act = New-ScheduledTaskAction -Execute {ps_quote(python)} -Argument {ps_quote(arg)}",
+        "$trg = New-ScheduledTaskTrigger -Daily -At '09:00' -RandomDelay (New-TimeSpan -Minutes 60)",
+        "$set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+        "-ExecutionTimeLimit (New-TimeSpan -Minutes 10)",
+        f"Register-ScheduledTask -TaskName {ps_quote(SCHEDULE_TASK_NAME)} -Action $act -Trigger $trg -Settings $set "
+        "-Description 'linkmycom keys refresh (daily)' -Force | Out-Null",
+        "'LMC_SCHEDULE_OK'",
+    ]) + "\n"
+
+
+def launchd_plist(python: str, script: str, log: str) -> bytes:
+    import plistlib
+
+    return plistlib.dumps({
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": refresh_command(python, script),
+        "StartCalendarInterval": {"Hour": 9, "Minute": 0},
+        "RunAtLoad": False,
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+    })
+
+
+def systemd_units(python: str, script: str) -> tuple[str, str]:
+    """(서비스, 타이머) 내용. systemd 의 ExecStart 는 공백 있는 인자를 큰따옴표로 묶는다."""
+    exec_start = " ".join('"' + a.replace('"', '\\"') + '"' if (" " in a or '"' in a) else a
+                          for a in refresh_command(python, script))
+    service = ("[Unit]\nDescription=linkmycom keys refresh\n\n"
+               f"[Service]\nType=oneshot\nExecStart={exec_start}\n")
+    timer = ("[Unit]\nDescription=linkmycom keys refresh (daily)\n\n"
+             "[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n\n"
+             "[Install]\nWantedBy=timers.target\n")
+    return service, timer
+
+
+def schedule_python() -> str:
+    """예약 실행에 쓸 파이썬. Windows 는 창이 뜨지 않게 옆의 pythonw.exe 를 쓴다."""
+    exe = sys.executable
+    if os.name == "nt":
+        w = Path(exe).with_name("pythonw.exe")
+        if w.exists():
+            return str(w)
+    return exe
+
+
+def schedule_keys_refresh() -> bool:
+    """하루 한 번 'keys refresh' 를 예약한다(Windows 예약 작업, macOS launchd, Linux systemd 사용자 타이머)."""
+    python = schedule_python()
+    script = str(update_target(Path(__file__).resolve()))
+    system = platform.system()
+    try:
+        if system == "Windows":
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                                encode_ps(schedule_windows_ps(python, script))],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            ok = "LMC_SCHEDULE_OK" in r.stdout
+            if not ok:
+                warn("키 자동 갱신 예약 작업을 만들지 못했습니다: " + (r.stderr.strip().splitlines() or ["?"])[-1])
+            return ok
+        if system == "Darwin":
+            agents = Path.home() / "Library" / "LaunchAgents"
+            agents.mkdir(parents=True, exist_ok=True)
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            plist = agents / f"{LAUNCHD_LABEL}.plist"
+            plist.write_bytes(launchd_plist(python, script, str(CONFIG_DIR / "keys-refresh.log")))
+            subprocess.run(["launchctl", "unload", str(plist)], capture_output=True, timeout=30)
+            return subprocess.run(["launchctl", "load", "-w", str(plist)], capture_output=True, timeout=30).returncode == 0
+        if system == "Linux":
+            if not shutil.which("systemctl"):
+                warn("systemctl 이 없어 키 자동 갱신을 예약하지 못했습니다. cron 에 'linkmycom keys refresh --quiet' 를 넣으세요.")
+                return False
+            unit_dir = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
+            unit_dir.mkdir(parents=True, exist_ok=True)
+            service, timer = systemd_units(python, script)
+            (unit_dir / f"{SYSTEMD_UNIT}.service").write_text(service, encoding="utf-8")
+            (unit_dir / f"{SYSTEMD_UNIT}.timer").write_text(timer, encoding="utf-8")
+            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, timeout=30)
+            return subprocess.run(["systemctl", "--user", "enable", "--now", f"{SYSTEMD_UNIT}.timer"],
+                                  capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as e:
+        warn(f"키 자동 갱신을 예약하지 못했습니다: {e}")
+        return False
+    return False
+
+
 def cmd_setup(cfg: dict, args: list[str]) -> int:
     """이 컴퓨터를 tailnet 안에서 SSH 로 들어올 수 있게 만들고 공개키를 교환한다."""
     no_server = "--no-server" in args
@@ -1103,6 +1443,11 @@ def cmd_setup(cfg: dict, args: list[str]) -> int:
     print(f"이 컴퓨터의 공개키: {pub[:40]}...")
     if not no_keys:
         refresh_keys(cfg)
+        if "--no-schedule" not in args:
+            if schedule_keys_refresh():
+                print("하루 한 번 공개키 목록을 자동으로 받도록 예약했습니다(keys refresh).")
+            else:
+                warn("키 자동 갱신 예약을 건너뜁니다. 대화형 실행 때 하루 한 번 확인은 그대로 합니다.")
     ok = True
     if not no_server:
         system = platform.system()
@@ -1179,17 +1524,55 @@ def keys_file(cfg: dict) -> Path:
     return nested if nested.parent.is_dir() else rd / "authorized_keys"
 
 
+def git_origin(rd: Path) -> str:
+    try:
+        r = subprocess.run(["git", "-C", str(rd), "remote", "get-url", "origin"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def is_mirror_origin(url: str) -> bool:
+    return bool(MIRROR_ORIGIN_RE.search(url.strip()))
+
+
+def sign_bytes(data: bytes, key: Path, namespace: str) -> bytes:
+    """'ssh-keygen -Y sign' 으로 data 의 서명(armored)을 만든다. 실패하면 die."""
+    try:
+        r = subprocess.run([keygen_bin(), "-Y", "sign", "-f", str(key), "-n", namespace], input=data,
+                           capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        die(f"서명하지 못했습니다: {e}")
+    if r.returncode != 0 or b"BEGIN SSH SIGNATURE" not in r.stdout:
+        die("서명하지 못했습니다: " + r.stderr.decode("utf-8", "replace").strip())
+    return r.stdout
+
+
+def git_show_bytes(rd: Path, rev_path: str) -> bytes:
+    r = subprocess.run(["git", "-C", str(rd), "show", rev_path], capture_output=True, timeout=30)
+    if r.returncode != 0:
+        die(f"git show {rev_path} 실패: {r.stderr.decode('utf-8', 'replace').strip()}")
+    return r.stdout
+
+
 def cmd_keys(peers_loader, cfg: dict, args: list[str]) -> int:
     sub = args[0] if args else "show"
     if sub == "show":
         print(ensure_local_key())
         return 0
     if sub == "refresh":
-        return 0 if refresh_keys(cfg) >= 0 else 1
+        return 0 if refresh_keys(cfg, quiet="--quiet" in args, force="--force" in args) >= 0 else 1
     if sub in ("collect", "publish"):
         rd = repo_dir(cfg)
+        origin = git_origin(rd)
+        if not is_mirror_origin(origin):
+            die(f"{rd} 의 origin 이 거울 저장소 jekim14/linkmycom-cli 가 아닙니다: {origin or '(없음)'}\n"
+                "'linkmycom config repo_dir=<linkmycom-cli 클론 경로>' 로 거울 클론을 지정하세요.")
+        if sub == "publish" and not SIGNING_KEY.exists():
+            die(f"서명키 {SIGNING_KEY} 가 없습니다. 공개키 목록은 관리 PC 의 서명키로만 게시합니다.")
         target = keys_file(cfg)
-        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        existing = target.read_bytes().decode("utf-8") if target.exists() else ""
         entries: dict[str, str] = {}
         for line in existing.splitlines():
             s = line.strip()
@@ -1204,50 +1587,72 @@ def cmd_keys(peers_loader, cfg: dict, args: list[str]) -> int:
                 entries[key] = key
         header = "# linkmycom 가 관리하는 tailnet 공개키 목록. 각 기기의 'linkmycom setup' / 'linkmycom keys refresh' 가 이 파일을 받아 authorized_keys 에 넣는다.\n"
         text = header + "\n".join(entries) + "\n"
-        changed = text != existing
-        target.write_text(text, encoding="utf-8")
+        data = text.encode("utf-8")  # 서명한 바이트와 게시되는 바이트가 같도록 LF 그대로 쓴다.
+        target.write_bytes(data)
         print(f"{target}: 공개키 {len(entries)}개")
         if sub == "publish":
-            if not changed:
-                print("바뀐 내용이 없습니다.")
+            sig_path = target.with_name(target.name + SIG_SUFFIX)
+            old_sig = sig_path.read_bytes() if sig_path.exists() else b""
+            sig_ok = bool(old_sig) and verify_signature(data, old_sig, KEYS_SIG_NAMESPACE)[0]
+            if text == existing and sig_ok:
+                print("바뀐 내용이 없습니다(서명도 맞음).")
                 return 0
+            sig = sign_bytes(data, SIGNING_KEY, KEYS_SIG_NAMESPACE)
+            ok, reason = verify_signature(data, sig, KEYS_SIG_NAMESPACE)
+            if not ok:
+                die(f"새 서명이 내장 공개키로 확인되지 않습니다({reason}). {SIGNING_KEY} 가 맞는 서명키인지 확인하세요.")
+            sig_path.write_bytes(sig)
             rel = str(target.relative_to(rd)).replace("\\", "/")
-            cmds = [["git", "add", rel],
-                    ["git", "commit", "-q", "-m", "keys: tailnet 공개키 목록 갱신"],
-                    ["git", "push", "-q"]]
-            for cmd in cmds:
-                r = subprocess.run(cmd, cwd=rd)
-                if r.returncode != 0:
-                    die(f"실패: {' '.join(cmd)}")
-            print(f"게시했습니다. 각 기기는 하루 안에 자동으로 받거나 'linkmycom keys refresh' 로 바로 받습니다.\n{keys_url(cfg)}")
+            rel_sig = rel + SIG_SUFFIX
+            if subprocess.run(["git", "-c", "core.autocrlf=false", "add", rel, rel_sig], cwd=rd).returncode != 0:
+                die(f"실패: git add {rel} {rel_sig}")
+            # core.autocrlf 로 작업 폴더만 CRLF 였던 경우 등, 다시 쓰고 서명해도 커밋할 바이트가 같으면 끝낸다
+            # (ed25519 서명은 같은 내용이면 같은 바이트다).
+            if subprocess.run(["git", "diff", "--cached", "--quiet", "--", rel, rel_sig], cwd=rd).returncode == 0:
+                print("바뀐 내용이 없습니다(커밋된 목록·서명과 같음).")
+                return 0
+            cmd = ["git", "-c", "core.autocrlf=false", "commit", "-q", "-m", "keys: tailnet 공개키 목록 갱신(서명)"]
+            if subprocess.run(cmd, cwd=rd).returncode != 0:
+                die(f"실패: {' '.join(cmd)}")
+            # 커밋된 바이트로 다시 확인한다. 줄바꿈 변환 등으로 어긋나면 올리지 않는다.
+            ok, reason = verify_signature(git_show_bytes(rd, f"HEAD:{rel}"), git_show_bytes(rd, f"HEAD:{rel_sig}"),
+                                          KEYS_SIG_NAMESPACE)
+            if not ok:
+                die(f"커밋된 목록의 서명이 맞지 않아 푸시하지 않습니다({reason}). 'git -C {rd} reset HEAD~1' 로 되돌리고 확인하세요.")
+            if subprocess.run(["git", "push", "-q"], cwd=rd).returncode != 0:
+                die("실패: git push")
+            print(f"서명해 게시했습니다. 각 기기는 하루 안에 자동으로 받거나 'linkmycom keys refresh' 로 바로 받습니다.\n{keys_url(cfg)}")
         return 0
-    die("사용법: linkmycom keys [show|refresh|collect|publish [--collect]]")
+    die("사용법: linkmycom keys [show|refresh [--force]|collect|publish [--collect]]")
 
 
 # ---------------------------------------------------------------- 화면 보기와 여러 모니터 도우미 (screen / display / password).
 
 DISPLAY_ACTIONS = ("list", "gather", "single", "extend")
-REMOTE_DISPLAY_SCRIPT = r"C:\Program Files\DeskTools\DeskTools-Display.ps1"
+# 화면공유 앱의 도우미 스크립트. 새 이름을 먼저 보고, 아직 옛 DeskTools 로 설치된 PC 면 옛 경로를 쓴다.
+REMOTE_DISPLAY_SCRIPT = r"C:\Program Files\LinkMyCom\LinkMyCom-Display.ps1"
+LEGACY_DISPLAY_SCRIPT = r"C:\Program Files\DeskTools\DeskTools-Display.ps1"
 
 
 def display_remote_ps(action: str, minutes: int) -> str:
-    """원격 Windows 의 로그인 사용자 데스크톱에서 DeskTools-Display.ps1 을 실행하고 결과를 출력하는 PowerShell."""
+    """원격 Windows 의 로그인 사용자 데스크톱에서 LinkMyCom-Display.ps1 을 실행하고 결과를 출력하는 PowerShell."""
     if action not in DISPLAY_ACTIONS:
         raise ValueError(action)
     minutes = max(5, min(int(minutes), 24 * 60))
     lines = [
         "$ErrorActionPreference = 'Stop'",
         f"$script = '{REMOTE_DISPLAY_SCRIPT}'",
-        "if (-not (Test-Path $script)) { 'DeskTools-Display.ps1 is not installed on this PC (run Install-NativeHost).'; exit 2 }",
+        f"if (-not (Test-Path $script)) {{ $script = '{LEGACY_DISPLAY_SCRIPT}' }}",
+        "if (-not (Test-Path $script)) { 'LinkMyCom-Display.ps1 is not installed on this PC (run Install-NativeHost).'; exit 2 }",
         "$user = (Get-CimInstance Win32_ComputerSystem).UserName",
         "if (-not $user) { 'Nobody is signed in on this PC.'; exit 3 }",
-        "$dir = Join-Path $env:ProgramData 'DeskTools'; New-Item -ItemType Directory -Force -Path $dir | Out-Null",
+        "$dir = Join-Path $env:ProgramData 'LinkMyCom'; New-Item -ItemType Directory -Force -Path $dir | Out-Null",
         "$out = Join-Path $dir ('display-' + [guid]::NewGuid().ToString('N') + '.txt')",
         f"$arg = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"' + $script + '\" -Action {action} "
         f"-RestoreMinutes {minutes} -Out \"' + $out + '\"'",
         "$act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg",
         "$pr = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest",
-        "$name = 'DeskTools-Display-' + [guid]::NewGuid().ToString('N').Substring(0, 8)",
+        "$name = 'LinkMyCom-Display-' + [guid]::NewGuid().ToString('N').Substring(0, 8)",
         "Register-ScheduledTask -TaskName $name -Action $act -Principal $pr -Force | Out-Null",
         "Start-ScheduledTask -TaskName $name",
         "$deadline = (Get-Date).AddSeconds(60)",
@@ -1271,20 +1676,29 @@ def find_local_file(*candidates) -> str | None:
     return None
 
 
-def desktools_exe() -> str | None:
+def portable_exe(local: str, root: str, exe: str) -> str | None:
+    """휴대용 설치(%LOCALAPPDATA%\\<root>)의 활성 버전 실행 파일. 기록이 없거나 깨졌으면 None."""
+    cur = os.path.join(local, root, "current.json")
+    if not local or not os.path.exists(cur):
+        return None
+    try:
+        with open(cur, encoding="utf-8") as f:
+            ver = json.load(f).get("version", "")
+        return os.path.join(local, root, "versions", ver, exe)
+    except (OSError, ValueError):
+        return None
+
+
+def screen_app_exe() -> str | None:
+    """화면공유 앱 실행 파일. LinkMyCom 을 먼저, 아직 바꾸지 않은 PC 의 DeskTools·RustDesk 를 그다음에 찾는다."""
     pf = os.environ.get("ProgramFiles", r"C:\Program Files")
     local = os.environ.get("LOCALAPPDATA", "")
-    portable = None
-    cur = os.path.join(local, "DeskToolsNative", "current.json")
-    if local and os.path.exists(cur):
-        try:
-            with open(cur, encoding="utf-8") as f:
-                ver = json.load(f).get("version", "")
-            portable = os.path.join(local, "DeskToolsNative", "versions", ver, "desktools.exe")
-        except (OSError, ValueError):
-            portable = None
-    return find_local_file(os.path.join(pf, "DeskTools", "desktools.exe"), portable,
+    return find_local_file(os.path.join(pf, "LinkMyCom", "linkmycom.exe"),
+                           portable_exe(local, "LinkMyComNative", "linkmycom.exe"),
+                           os.path.join(pf, "DeskTools", "desktools.exe"),
+                           portable_exe(local, "DeskToolsNative", "desktools.exe"),
                            os.path.join(pf, "RustDesk", "rustdesk.exe"),
+                           "/Applications/LinkMyCom.app/Contents/MacOS/LinkMyCom",
                            "/Applications/RustDesk.app/Contents/MacOS/RustDesk")
 
 
@@ -1313,9 +1727,10 @@ def cmd_display(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str
     if args[0] in ("self", "local", "."):
         if os.name != "nt":
             die("display 는 Windows PC 에서만 씁니다.")
-        script = find_local_file(REMOTE_DISPLAY_SCRIPT, str(Path(__file__).with_name("DeskTools-Display.ps1")))
+        script = find_local_file(REMOTE_DISPLAY_SCRIPT, str(Path(__file__).with_name("LinkMyCom-Display.ps1")),
+                                 LEGACY_DISPLAY_SCRIPT)
         if not script:
-            die("DeskTools-Display.ps1 을 찾지 못했습니다.")
+            die("LinkMyCom-Display.ps1 을 찾지 못했습니다.")
         return subprocess.call(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
                                 "-Action", action, "-RestoreMinutes", str(minutes)])
     peer = pick_one_or_die(peers, cfg, blocks, args[0])
@@ -1344,7 +1759,7 @@ def cmd_screen(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]
             peer = found[0]
         else:
             warn(f"screen={alt} 에 맞는 피어가 {len(found)}개라 {peer['name']} 으로 접속합니다.")
-    exe = desktools_exe()
+    exe = screen_app_exe()
     if not exe:
         die("화면공유 앱(DeskTools 또는 RustDesk) 실행 파일을 찾지 못했습니다. LinkMyCom 설치기를 먼저 실행하세요.")
     if not peer["online"]:
@@ -1361,11 +1776,280 @@ def cmd_password() -> int:
     if os.name != "nt":
         die("password 는 Windows PC 에서 실행하세요(Mac 도 함께 설정합니다).")
     pf = os.environ.get("ProgramFiles", r"C:\Program Files")
-    script = find_local_file(os.path.join(pf, "DeskTools", "Set-DeskToolsPassword.ps1"),
-                             str(Path(__file__).with_name("Set-DeskToolsPassword.ps1")))
+    script = find_local_file(os.path.join(pf, "LinkMyCom", "Set-LinkMyComPassword.ps1"),
+                             str(Path(__file__).with_name("Set-LinkMyComPassword.ps1")),
+                             os.path.join(pf, "DeskTools", "Set-DeskToolsPassword.ps1"))
     if not script:
-        die("Set-DeskToolsPassword.ps1 을 찾지 못했습니다.")
+        die("Set-LinkMyComPassword.ps1 을 찾지 못했습니다.")
     return subprocess.call(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script])
+
+
+# ---------------------------------------------------------------- 점검 (doctor).
+
+# 이 PC 와 원격 PC 에서 똑같이 실행하는 점검 스크립트. 원격에는 압축·base64 로 명령줄에 실어 보낸다.
+# 원격 셸·코드 페이지에 흔들리지 않게 ASCII 만 쓰고, 결과는 "LMCDOC|이름|상태|내용" 줄로 낸다(표는 부른 쪽에서 그린다).
+# 인자 1개: 확인할 내 공개키의 base64 부분(없으면 그 항목을 건너뜀). 파이썬 3.6 이상에서 돈다.
+DOCTOR_PY = r'''
+import json, os, re, shutil, socket, subprocess, sys, time
+KEY = sys.argv[1] if len(sys.argv) > 1 else ""
+WIN = os.name == "nt"
+HOME = os.path.expanduser("~")
+PFX = ("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-", "sk-ssh-ed25519@", "sk-ecdsa-sha2-")
+LAD = os.environ.get("LOCALAPPDATA", "")
+
+def out(name, status, detail=""):
+    d = " ".join(str(detail).replace("|", "/").split())[:200]
+    print("LMCDOC|%s|%s|%s" % (name, status, d.encode("ascii", "backslashreplace").decode("ascii")))
+    sys.stdout.flush()
+
+def run(cmd, timeout=25):
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        return r.returncode, r.stdout.decode("utf-8", "replace").strip()
+    except Exception as e:
+        return -1, str(e)
+
+def ps(script):
+    return run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script])
+
+def read(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read().decode("utf-8", "replace")
+    except (OSError, TypeError):
+        return None
+
+def ver_in(path):
+    m = re.search(r'(?m)^__version__\s*=\s*"([^"]+)"', read(path) or "")
+    return m.group(1) if m else ""
+
+st = {}
+cands = [shutil.which("tailscale") or "", r"C:\Program Files\Tailscale\tailscale.exe",
+         "/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/usr/local/bin/tailscale",
+         "/opt/homebrew/bin/tailscale", "/usr/bin/tailscale"]
+for exe in [c for c in cands if c and os.path.exists(c)]:
+    rc, o = run([exe, "status", "--json"])
+    try:
+        st = json.loads(o) if rc == 0 else {}
+    except ValueError:
+        st = {}
+    if st.get("BackendState") == "Running":
+        break
+me = st.get("Self") or {}
+if st.get("BackendState") == "Running":
+    out("tailscale", "OK", "%s %s" % ((me.get("DNSName") or "").split(".")[0], " ".join((me.get("TailscaleIPs") or [])[:1])))
+else:
+    out("tailscale", "FAIL", st.get("BackendState") or "tailscale not found or not running")
+
+try:
+    socket.create_connection(("127.0.0.1", 22), 2).close()
+    out("ssh_port", "OK", "127.0.0.1:22 open")
+except OSError:
+    if me.get("sshHostKeys"):
+        out("ssh_port", "OK", "Tailscale SSH")
+    else:
+        out("ssh_port", "FAIL", "nothing listens on port 22")
+if WIN:
+    rc, o = ps("(Get-Service sshd -ErrorAction SilentlyContinue).Status")
+    out("sshd", "OK" if o == "Running" else "FAIL", o or "sshd service missing")
+    rc, o = ps("$r = Get-NetFirewallRule -Name 'tssh-OpenSSH','tssh-OpenSSH-next' -ErrorAction SilentlyContinue | Select-Object -First 1; "
+               "if (-not $r) { 'NONE' } else { 'RULE;' + $r.Name + ';' + $r.Enabled + ';' + "
+               "(@(($r | Get-NetFirewallInterfaceFilter).InterfaceAlias) -join ',') + ';' + "
+               "(@(($r | Get-NetFirewallAddressFilter).RemoteAddress) -join ',') }")
+    p = (o.splitlines() or [""])[-1].split(";")
+    if p[0] != "RULE" or len(p) < 5:
+        out("firewall", "FAIL", "rule tssh-OpenSSH missing" if o.strip() == "NONE" else o)
+    elif p[2] != "True":
+        out("firewall", "FAIL", "%s disabled" % p[1])
+    elif p[3] in ("", "Any"):
+        out("firewall", "WARN", "%s not bound to the Tailscale interface (%s)" % (p[1], p[4]))
+    else:
+        out("firewall", "OK", "%s on %s (%s)" % (p[1], p[3], p[4]))
+else:
+    out("firewall", "SKIP", "not Windows")
+
+ak = os.path.join(HOME, ".ssh", "authorized_keys")
+text = read(ak)
+if text is None:
+    out("authorized_keys", "FAIL", "missing")
+else:
+    keys = [l.strip() for l in text.splitlines() if l.strip().startswith(PFX)]
+    m = re.search(r"# >>> tssh keys.*?\n(.*?)# <<< tssh keys", text, re.S)
+    managed = len([l for l in (m.group(1) if m else "").splitlines() if l.strip().startswith(PFX)])
+    note = ""
+    if WIN and re.search(r"(?mi)^\s*Match\s+Group\s+administrators", read(os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "ssh", "sshd_config")) or ""):
+        note = "; sshd_config still sends administrators to administrators_authorized_keys"
+    out("authorized_keys", "WARN" if note or not keys else "OK", "%d keys, %d in the linkmycom block%s" % (len(keys), managed, note))
+    if WIN:
+        rc, o = ps("$bad = @('S-1-1-0','S-1-5-32-545','S-1-5-11'); $w = @(); "
+                   "foreach ($a in (Get-Acl -LiteralPath '%s').Access) { try { $sid = $a.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }; "
+                   "if ($a.AccessControlType -eq 'Allow' -and $bad -contains $sid -and $a.FileSystemRights.ToString() -match 'Write|Modify|FullControl') { $w += $sid } }; "
+                   "if ($w.Count) { 'BAD;' + ($w -join ',') } else { 'OK' }" % ak.replace("'", "''"))
+        out("ak_acl", "OK" if o == "OK" else "FAIL", "no broad write access" if o == "OK" else o)
+    else:
+        bad = [p for p in (ak, os.path.dirname(ak)) if os.stat(p).st_mode & 0o022 or os.stat(p).st_uid != os.getuid()]
+        out("ak_acl", "FAIL" if bad else "OK", ("group/other writable or not owned: " + ", ".join(bad)) if bad else "owner only")
+    if KEY:
+        found = any(KEY in l.split() for l in keys)
+        out("my_key", "OK" if found else "FAIL", "my key is registered" if found else "my key is not in authorized_keys")
+
+clis = ([os.path.join(LAD, "linkmycom", "linkmycom.py"), os.path.join(LAD, "DeskTools", "tower", "linkmycom.py")] if WIN
+        else [os.path.join(HOME, ".local", "bin", "linkmycom"), "/usr/local/bin/linkmycom"])
+vers = ["%s %s" % (os.path.basename(os.path.dirname(p)), ver_in(p)) for p in clis if ver_in(p)]
+out("cli", "INFO" if vers else "WARN", ", ".join(vers) or "linkmycom not found in the usual places")
+if WIN:
+    try:
+        out("tower", "INFO", json.loads(read(os.path.join(LAD, "DeskTools", "tower", "release.json")) or "{}").get("version") or "not installed")
+    except ValueError:
+        out("tower", "WARN", "release.json unreadable")
+nv = ""
+if WIN:
+    nv = (read(os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "LinkMyCom", "LINKMYCOM_VERSION")) or "").strip()
+    if not nv:
+        try:
+            nv = json.loads(read(os.path.join(LAD, "LinkMyComNative", "current.json")) or "{}").get("version") or ""
+        except ValueError:
+            nv = ""
+elif sys.platform == "darwin":
+    try:
+        import plistlib
+        with open("/Applications/LinkMyCom.app/Contents/Info.plist", "rb") as f:
+            nv = plistlib.load(f).get("CFBundleShortVersionString") or ""
+    except Exception:
+        nv = ""
+out("native", "INFO", nv or "not installed")
+
+try:
+    state = json.loads(read(os.path.join(HOME, ".tssh", "state.json")) or "{}")
+except ValueError:
+    state = {}
+last = state.get("last_keys_refresh") or ""
+err = state.get("last_keys_error") or ""
+if not last:
+    out("keys_refresh", "WARN", ("never; last error: " + err) if err else "no record (setup not run, or before 0.4.4)")
+else:
+    try:
+        import datetime
+        age = time.time() - datetime.datetime.strptime(last[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp()
+    except ValueError:
+        age = 0
+    stale = age > 3 * 86400 or (err and err[:19] > last[:19])
+    out("keys_refresh", "WARN" if stale else "OK", last[:16].replace("T", " ") + " UTC" + ("; later error: " + err if err and err[:19] > last[:19] else ""))
+'''
+
+DOCTOR_LABELS = {
+    "python": "파이썬", "tailscale": "Tailscale", "ssh_port": "SSH 22 포트", "sshd": "sshd 서비스",
+    "firewall": "방화벽 규칙", "authorized_keys": "authorized_keys", "ak_acl": "authorized_keys 권한",
+    "my_key": "내 공개키 등록", "keys_list": "게시된 키 목록", "cli": "CLI 버전", "tower": "타워 버전",
+    "native": "화면공유 앱 버전", "keys_refresh": "마지막 키 갱신",
+}
+DOCTOR_COLORS = {"OK": "32", "FAIL": "31", "WARN": "33", "INFO": "36", "SKIP": "90"}
+
+
+def doctor_oneliner() -> str:
+    """DOCTOR_PY 를 zlib·base64 로 줄여 'python -c' 한 줄로 실행하는 코드."""
+    import base64
+    import zlib
+
+    packed = base64.b64encode(zlib.compress(DOCTOR_PY.encode("ascii"), 9)).decode("ascii")
+    return f"import base64,zlib;exec(zlib.decompress(base64.b64decode('{packed}')))"
+
+
+def doctor_remote_command(os_name: str, key_blob: str = "") -> tuple[str, str | None]:
+    """원격 PC 에서 같은 점검 스크립트를 돌리는 (명령 한 줄, ssh 표준 입력으로 보낼 내용).
+
+    Windows 는 sshd 기본 셸이 cmd.exe 일 수 있어 명령줄을 8191자 안으로 줄여야 하므로, 짧은 PowerShell 이
+    Store 파이썬 스텁을 건너뛴 파이썬을 찾고 점검 코드는 표준 입력으로 받는다. 그 밖은 코드를 명령줄에 싣는다.
+    """
+    code = doctor_oneliner()
+    tail = f" {key_blob}" if key_blob else ""
+    if os_name == "windows":
+        lines = [
+            "$py = $null",
+            "foreach ($n in @('python','python3','py')) { $c = Get-Command $n -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Source -notlike '*WindowsApps*' } | Select-Object -First 1; if ($c) { $py = $c.Source; break } }",
+            "if (-not $py) { 'LMCDOC|python|FAIL|python 3 not found'; exit 0 }",
+            "$code = [Console]::In.ReadToEnd().Trim()",
+            "& $py -c $code" + tail,
+        ]
+        return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n"), code + "\n"
+    return (f"python3 -c \"{code}\"{tail} || python -c \"{code}\"{tail} || "
+            "echo 'LMCDOC|python|FAIL|python 3 not found'"), None
+
+
+def parse_doctor_lines(text: str) -> list[tuple[str, str, str]]:
+    rows: list[tuple[str, str, str]] = []
+    for line in text.splitlines():
+        parts = line.strip().split("|", 3)
+        if len(parts) == 4 and parts[0] == "LMCDOC":
+            rows.append((parts[1], parts[2], parts[3]))
+    return rows
+
+
+def local_key_blob() -> str:
+    """내 공개키의 base64 부분. 키가 없으면 빈 문자열."""
+    try:
+        parts = LOCAL_KEY.with_suffix(".pub").read_text(encoding="utf-8").split()
+    except OSError:
+        return ""
+    return parts[1] if len(parts) >= 2 else ""
+
+
+def doctor_keys_list_row(cfg: dict) -> tuple[str, str, str]:
+    """게시된 공개키 목록을 받아 서명을 확인하고 내 키가 들어 있는지 본다."""
+    try:
+        keys = fetch_remote_keys(cfg)
+    except Exception as e:  # noqa: BLE001
+        return "keys_list", "FAIL", str(e)
+    blob = local_key_blob()
+    mine = bool(blob) and any(blob in k.split() for k in keys)
+    if not blob:
+        return "keys_list", "WARN", f"서명 확인, 키 {len(keys)}개. 이 PC 에 공개키가 없음('linkmycom setup')"
+    if not mine:
+        return "keys_list", "WARN", f"서명 확인, 키 {len(keys)}개. 이 PC 의 키가 없음(관리 PC 에서 'keys publish --collect')"
+    return "keys_list", "OK", f"서명 확인, 키 {len(keys)}개, 이 PC 의 키 포함"
+
+
+def print_doctor(title: str, rows: list[tuple[str, str, str]]) -> int:
+    print(c(title, "1"))
+    table = [[DOCTOR_LABELS.get(n, n), c(s, DOCTOR_COLORS.get(s, "0")), d] for n, s, d in rows]
+    print_table(table, ["점검", "결과", "내용"])
+    failed = [r for r in rows if r[1] == "FAIL"]
+    return 1 if failed else 0
+
+
+def cmd_doctor(cfg: dict, args: list[str]) -> int:
+    """이 PC(또는 이름을 준 PC)의 SSH 연결 조건을 점검해 OK/FAIL 표로 보인다. FAIL 이 있으면 종료 코드 1."""
+    host = next((a for a in args if not a.startswith("-")), None)
+    if not host:
+        try:
+            r = subprocess.run([sys.executable, "-c", doctor_oneliner()], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=180)
+            rows = parse_doctor_lines(r.stdout)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            die(f"점검 스크립트를 실행하지 못했습니다: {e}")
+        idx = next((i for i, x in enumerate(rows) if x[0] == "cli"), len(rows))
+        rows.insert(idx, doctor_keys_list_row(cfg))
+        return print_doctor(f"linkmycom doctor · 이 PC ({platform.node()}) · CLI {__version__}", rows)
+    peers = load_peers(tailscale_status())
+    blocks = ssh_config_blocks()
+    peer = pick_one_or_die(peers, cfg, blocks, host)
+    settings = host_settings(peer, cfg, blocks)
+    cmd = build_ssh_cmd(peer, settings, cfg, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"], ssh_path=ssh_bin())
+    remote, stdin_text = doctor_remote_command(peer["os"], local_key_blob())
+    cmd.append(remote)
+    print(c(f"→ {peer['name']} 에 점검 스크립트를 보냅니다...", "36"))
+    try:
+        r = subprocess.run(cmd, input=stdin_text or "", capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=180)
+    except subprocess.TimeoutExpired:
+        die(f"{peer['name']} 이(가) 180초 안에 답하지 않았습니다.")
+    rows = parse_doctor_lines(r.stdout)
+    if not rows:
+        reason = ((r.stderr or "").strip().splitlines() or ["출력 없음"])[-1]
+        print_doctor(f"linkmycom doctor · {peer['name']}", [("ssh_port", "FAIL", f"SSH 로 들어가지 못했습니다: {reason}")])
+        return 1
+    return print_doctor(f"linkmycom doctor · {peer['name']} ({peer['ip']})", rows)
 
 
 # ---------------------------------------------------------------- 하위 명령.
@@ -1398,7 +2082,10 @@ def cmd_set(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]) -
         if v == "":
             entry.pop(k, None)
         elif k == "args":
-            entry[k] = v.split()
+            try:
+                entry[k] = split_args(v)
+            except ValueError as e:
+                die(f"args 값을 나누지 못했습니다({e}). 따옴표 짝을 확인하세요.")
         else:
             entry[k] = v
     cfg["hosts"][name] = entry
@@ -1429,7 +2116,7 @@ def cmd_config(cfg: dict, args: list[str]) -> None:
     for k, v in kv.items():
         if k in bools:
             cfg[k] = v.lower() in ("1", "true", "yes", "on", "y")
-        elif k in ("default_user", "update_repo", "update_ref", "repo_dir", "keys_url"):
+        elif k in ("default_user", "update_repo", "update_ref", "repo_dir", "keys_url", "keys_signer"):
             if v:
                 cfg[k] = v
             else:
@@ -1442,7 +2129,7 @@ def cmd_config(cfg: dict, args: list[str]) -> None:
                 cfg.get("ssh_options", {}).pop(opt, None)
         else:
             die(f"알 수 없는 설정 키: {k} (가능: default_user, use_magicdns, update_repo, update_ref, auto_update_check, "
-                "repo_dir, keys_url, ssh_options.<옵션>)")
+                "repo_dir, keys_url, keys_signer, ssh_options.<옵션>)")
     save_json(CONFIG_PATH, cfg)
     print(json.dumps(cfg, ensure_ascii=False, indent=2))
 
@@ -1454,7 +2141,11 @@ def pick_one_or_die(peers: list[dict], cfg: dict, blocks: list[dict], query: str
     if not found:
         die(f"'{query}' 에 맞는 피어가 없습니다. 'linkmycom list' 로 이름을 확인하세요.")
     if not sys.stdin.isatty():
-        return found[0]
+        # 스크립트·원격 명령에서 엉뚱한 PC 로 들어가지 않도록 고르지 않고 후보만 알린다.
+        names = ", ".join(p["name"] for p in found)
+        print(c("오류: ", "31") + f"'{query}' 에 맞는 피어가 {len(found)}개입니다: {names}. 정확한 이름을 쓰세요.",
+              file=sys.stderr)
+        sys.exit(1)
     print(c(f"'{query}' 에 맞는 피어가 {len(found)}개입니다.", "33"))
     chosen = pick_interactive(found, cfg, blocks, [])
     if not chosen or chosen.get("__refresh__"):
@@ -1693,6 +2384,119 @@ def legacy_name_notice(invoked_as: str, made: list[Path], state: dict) -> str | 
     return f"알림: {invoked_as} 는 linkmycom(줄여서 lmc)으로 이름이 바뀌었습니다. 옛 이름도 계속 동작합니다."
 
 
+# ---------------------------------------------------------------- 명령별 도움말과 셸 자동 완성.
+
+COMMAND_HELP = {
+    "connect": "linkmycom <이름> [ssh 인자...]\n  이름(일부만 써도 됨)·user@이름·-u/-p/--dns/-n 으로 바로 접속. 호스트 뒤 인자는 ssh 에 그대로 넘긴다.\n"
+               "  비대화형(파이프·스크립트)에서 이름이 여러 PC 에 맞으면 후보를 적고 종료 코드 1.",
+    "list": "linkmycom list\n  피어 목록을 출력하고, 자동 완성용 호스트 이름 캐시(~/.tssh/hosts.txt)를 갱신한다.",
+    "last": "linkmycom last [ssh 인자...]\n  최근 접속한 호스트에 다시 접속.",
+    "set": "linkmycom set <이름> user=.. port=.. key=.. alias=a,b args=\"-A -o 'ProxyJump x'\" screen=<다른 이름>\n"
+           "  호스트별 접속 설정 저장. 빈 값(user=)은 그 키를 지운다. args 는 셸처럼 따옴표로 묶을 수 있다.",
+    "unset": "linkmycom unset <이름>\n  저장한 호스트 설정 삭제.",
+    "resolve": "linkmycom resolve <이름>\n  user@주소 를 출력(scp 등에 활용).",
+    "export": "linkmycom export\n  ~/.ssh/config 에 관리 블록을 써서 일반 'ssh <이름>' 도 되게 한다.",
+    "config": "linkmycom config [키=값 ...]\n  전역 설정: default_user, use_magicdns, update_repo, update_ref, auto_update_check, repo_dir,\n"
+              "  keys_url, keys_signer, ssh_options.<옵션>. 인자 없이 쓰면 현재 설정을 보인다.",
+    "update": "linkmycom update [--check]\n  거울(jekim14/linkmycom-cli) 최신 릴리스의 linkmycom.py 를 받아 서명(linkmycom.py.sig)·SHA256·문법을\n"
+              "  확인한 뒤에만 교체한다. --check 는 확인만.",
+    "version": "linkmycom version\n  버전 출력.",
+    "help": "linkmycom help [명령]\n  전체 도움말, 또는 그 명령의 도움말.",
+    "completion": "linkmycom completion powershell|bash|zsh\n  자동 완성 스크립트를 출력한다. 예:\n"
+                  "    PowerShell: linkmycom completion powershell | Out-String | Invoke-Expression   ($PROFILE 에 넣으면 계속)\n"
+                  "    bash: source <(linkmycom completion bash)      zsh: source <(linkmycom completion zsh)",
+    "doctor": "linkmycom doctor [이름]\n  Tailscale, sshd·22 포트, 방화벽 규칙, authorized_keys 권한·내 키 등록, 게시된 키 목록 서명,\n"
+              "  CLI·타워·화면공유 앱 버전, 마지막 키 갱신을 OK/FAIL 표로. 이름을 주면 그 PC 에 같은 점검을 ssh 로 보낸다.",
+    "setup": "linkmycom setup [--no-server] [--no-keys] [--no-schedule]\n  SSH 서버 켜기(Tailscale 대역·인터페이스만 허용) + 공개키 교환 + 하루 한 번 'keys refresh' 예약\n"
+             "  (Windows 예약 작업 LinkMyCom-KeysRefresh, macOS launchd, Linux systemd 사용자 타이머).",
+    "keys": "linkmycom keys [show | refresh [--force] [--quiet] | collect | publish [--collect]]\n"
+            "  refresh: 서명된 목록만 적용. 빈 목록은 거부, 관리 블록이 절반 이하로 줄면 --force 가 있어야 적용.\n"
+            "  publish: (관리 PC, 거울 클론에서만) ~/.ssh/linkmycom-signing 으로 서명해 authorized_keys·.sig 를 커밋·푸시.",
+    "screen": "linkmycom screen <이름> [--gather]\n  LinkMyCom 화면공유 앱으로 그 PC 화면 보기 창을 연다.",
+    "display": "linkmycom display <이름|self> [list|gather|single|extend] [--minutes N]\n  여러 모니터 PC 정리.",
+    "password": "linkmycom password\n  화면공유 영구 비밀번호를 내 모든 PC 에 한 번에 설정.",
+}
+COMPLETION_SHELLS = ("powershell", "bash", "zsh")
+COMPLETION_WORDS = {
+    "keys": ["show", "refresh", "collect", "publish", "--force", "--quiet", "--collect"],
+    "help": sorted(SUBCOMMANDS - {"ls"}),
+    "completion": list(COMPLETION_SHELLS),
+    "setup": ["--no-server", "--no-keys", "--no-schedule"],
+    "update": ["--check"],
+}
+HOST_COMMANDS = ["set", "unset", "resolve", "screen", "display", "doctor"]
+
+
+def completion_script(shell: str) -> str:
+    """셸 자동 완성 스크립트. 호스트 이름은 실행 때마다 ~/.tssh/hosts.txt(목록 캐시)에서 읽는다."""
+    subs = " ".join(sorted(SUBCOMMANDS))
+    if shell == "powershell":
+        cases = "\n".join(f"        '{k}' {{ $words = @({', '.join(repr(w) for w in v)}) }}" for k, v in COMPLETION_WORDS.items())
+        hosts = ", ".join(f"'{h}'" for h in HOST_COMMANDS)
+        return f"""# linkmycom PowerShell 자동 완성 (linkmycom completion powershell)
+Register-ArgumentCompleter -Native -CommandName linkmycom, lmc, tssh -ScriptBlock {{
+    param($wordToComplete, $commandAst, $cursorPosition)
+    $cache = Join-Path $HOME '.tssh\\hosts.txt'
+    $hosts = @(); if (Test-Path -LiteralPath $cache) {{ $hosts = @(Get-Content -LiteralPath $cache -Encoding UTF8) }}
+    $parts = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object {{ $_.ToString() }})
+    if ($wordToComplete) {{ $parts = @($parts | Select-Object -First ([Math]::Max(0, $parts.Count - 1))) }}
+    $words = @()
+    if ($parts.Count -eq 0) {{ $words = @('{subs.replace(' ', "','")}') + $hosts }}
+    else {{
+      switch ($parts[0]) {{
+{cases}
+        {{ @({hosts}) -contains $_ }} {{ $words = $hosts }}
+      }}
+    }}
+    $words | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{
+        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+    }}
+}}
+"""
+    cases = "\n".join(f"        {k}) words=\"{' '.join(v)}\" ;;" for k, v in COMPLETION_WORDS.items())
+    body = f"""# linkmycom {shell} 자동 완성 (linkmycom completion {shell})
+_linkmycom_complete() {{
+    local cur="${{COMP_WORDS[COMP_CWORD]}}" words=""
+    local hosts=""
+    [ -r "$HOME/.tssh/hosts.txt" ] && hosts="$(cat "$HOME/.tssh/hosts.txt")"
+    if [ "$COMP_CWORD" -eq 1 ]; then
+        words="{subs} $hosts"
+    else
+        case "${{COMP_WORDS[1]}}" in
+{cases}
+        {'|'.join(HOST_COMMANDS)}) words="$hosts" ;;
+        esac
+    fi
+    COMPREPLY=($(compgen -W "$words" -- "$cur"))
+}}
+complete -F _linkmycom_complete linkmycom lmc tssh
+"""
+    if shell == "zsh":
+        body = "autoload -U +X bashcompinit && bashcompinit\n" + body
+    return body
+
+
+def write_hosts_cache(peers: list[dict]) -> None:
+    """자동 완성용 호스트 이름 목록(한 줄에 하나). 실패해도 조용히 넘어간다."""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        replace_text(HOSTS_CACHE_PATH, "".join(p["name"] + "\n" for p in peers if p.get("name")))
+    except OSError:
+        pass
+
+
+def cmd_help(args: list[str]) -> int:
+    if not args:
+        print(__doc__)
+        return 0
+    name = {"ls": "list"}.get(args[0], args[0])
+    text = COMMAND_HELP.get(name)
+    if not text:
+        die(f"알 수 없는 명령 {args[0]}. 가능: {', '.join(sorted(COMMAND_HELP))}")
+    print(text)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # Windows 에서 파이프·Git Bash 로 출력할 때 cp949 로 한글이 깨지지 않도록 UTF-8 로 고정한다.
@@ -1728,8 +2532,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"linkmycom {__version__}")
         return 0
     if sub == "help" or (argv and argv[0] in ("-h", "--help")):
-        print(__doc__)
+        return cmd_help(argv[1:] if sub == "help" else [])
+    if sub == "completion":
+        if len(argv) < 2 or argv[1] not in COMPLETION_SHELLS:
+            die(f"사용법: linkmycom completion {'|'.join(COMPLETION_SHELLS)}")
+        print(completion_script(argv[1]), end="")
         return 0
+    if sub == "doctor":
+        return cmd_doctor(cfg, argv[1:])
     if sub == "update":
         return cmd_update(cfg, check_only="--check" in argv[1:])
     if sub == "config":
@@ -1745,6 +2555,7 @@ def main(argv: list[str] | None = None) -> int:
     status = tailscale_status()
     peers = load_peers(status)
     blocks = ssh_config_blocks()
+    write_hosts_cache(peers)
 
     if sub in ("list", "ls"):
         show_list(peers, cfg, blocks)

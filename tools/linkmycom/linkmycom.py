@@ -62,7 +62,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.4.5"
+__version__ = "0.4.6"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -2229,6 +2229,9 @@ def doctor_oneliner() -> str:
     return f"import base64,zlib;exec(zlib.decompress(base64.b64decode('{packed}')))"
 
 
+DOCTOR_STDIN_END = "__LMCDOC_END__"
+
+
 def doctor_remote_command(os_name: str, key_blob: str = "", versions_only: bool = False) -> tuple[str, str | None]:
     """원격 PC 에서 같은 점검 스크립트를 돌리는 (명령 한 줄, ssh 표준 입력으로 보낼 내용).
 
@@ -2244,10 +2247,15 @@ def doctor_remote_command(os_name: str, key_blob: str = "", versions_only: bool 
             "foreach ($n in @('python','python3','py')) { $c = Get-Command $n -ErrorAction SilentlyContinue | "
             "Where-Object { $_.Source -notlike '*WindowsApps*' } | Select-Object -First 1; if ($c) { $py = $c.Source; break } }",
             "if (-not $py) { 'LMCDOC|python|FAIL|python 3 not found'; exit 0 }",
-            "$code = [Console]::In.ReadToEnd().Trim()",
+            # Windows OpenSSH sometimes never delivers the stdin EOF to a nested PowerShell, so ReadToEnd() hung
+            # for the full timeout and left orphaned wrappers (officehermes, 2026-11-13). Read up to a sentinel line.
+            "$lines = New-Object System.Collections.Generic.List[string]",
+            "while ($null -ne ($l = [Console]::In.ReadLine())) { if ($l -eq '" + DOCTOR_STDIN_END + "') { break }; $lines.Add($l) }",
+            "$code = ($lines -join \"`n\").Trim()",
             "& $py -c $code" + tail,
         ]
-        return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n"), code + "\n"
+        return ("powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n"),
+                code + "\n" + DOCTOR_STDIN_END + "\n")
     return (f"python3 -c \"{code}\"{tail} || python -c \"{code}\"{tail} || "
             "echo 'LMCDOC|python|FAIL|python 3 not found'"), None
 

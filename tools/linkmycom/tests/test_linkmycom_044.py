@@ -426,7 +426,9 @@ class ScriptBuilderTests(unittest.TestCase):
         self.assertIn("WindowsApps", ps)
         self.assertTrue(ps.rstrip().endswith("AAAAkey"))
         self.assertLess(len(win), 8000)  # 원격 기본 셸이 cmd.exe 여도(명령줄 8191자) 들어가야 한다
-        self.assertEqual(stdin_text.strip(), linkmycom.doctor_oneliner())
+        # 0.4.6 부터 표준 입력 끝에 종료 표시 줄이 붙는다(Windows OpenSSH 가 EOF 를 안 넘길 때 멈추지 않게).
+        self.assertTrue(stdin_text.rstrip().endswith(linkmycom.DOCTOR_STDIN_END))
+        self.assertEqual(stdin_text.rstrip().removesuffix(linkmycom.DOCTOR_STDIN_END).strip(), linkmycom.doctor_oneliner())
         posix, none = linkmycom.doctor_remote_command("linux", "AAAAkey")
         self.assertIsNone(none)
         self.assertTrue(posix.startswith("python3 -c "))

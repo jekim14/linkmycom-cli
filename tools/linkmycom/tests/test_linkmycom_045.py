@@ -465,6 +465,7 @@ class FleetTests(unittest.TestCase):
                 mock.patch.object(linkmycom, "ssh_bin", return_value="ssh"), \
                 mock.patch.object(linkmycom, "latest_release", return_value={"tag_name": "v" + linkmycom.__version__}), \
                 mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"__version__ = 'x'\n", linkmycom.__version__)), \
+                mock.patch.object(linkmycom, "remote_scp_cmd", return_value=[sys.executable, "-c", "pass"]), \
                 mock.patch.object(linkmycom, "run_remote", side_effect=fake_remote), \
                 redirect_stdout(io.StringIO()) as out:
             self.assertEqual(linkmycom.cmd_fleet({}, ["update", "cli"]), 0)

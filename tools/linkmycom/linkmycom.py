@@ -62,7 +62,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.4.7"
+__version__ = "0.4.8"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -2641,20 +2641,28 @@ FLEET_INSTALL_PATHS = {
 }
 
 
-def fleet_push_script(data: bytes, version: str, paths: list[str]) -> str:
-    """원격에서 실행할 파이썬: 관리 PC 가 서명 확인한 새 linkmycom.py(base64)를 SHA256 으로 대조한 뒤,
+def fleet_push_script(data: bytes, version: str, paths: list[str], payload_path: str | None = None) -> str:
+    """원격에서 실행할 파이썬: 관리 PC 가 서명 확인한 새 linkmycom.py 를 SHA256 으로 대조한 뒤,
     주어진 설치 경로 중 실재하고 버전이 낮은 것만 원자적으로 바꾼다. 결과는 'LMCPUSH|경로|이전->새' 줄.
 
+    payload 는 base64 로 스크립트에 품거나(Unix: 표준 입력으로 보냄), payload_path 의 파일에서 읽는다
+    (Windows: Windows OpenSSH 가 200KB 넘는 표준 입력을 중첩 PowerShell 에 끝까지 못 넘겨 scp 로 먼저 보냄.
+    읽은 뒤 그 파일은 지운다).
     원격 PC 의 옛 CLI 가 스스로 받게 하면 SSH 세션 안의 ssh-keygen 파이프 문제(0.4.6 이하)로 멈추므로
     검증은 관리 PC 가 하고 원격은 해시만 맞춘다. SSH 채널 자체가 인증·암호화되어 있다.
     """
     import base64
     import hashlib
 
-    b64 = base64.b64encode(data).decode("ascii")
+    if payload_path:
+        load = (f"P = os.path.expanduser(os.path.expandvars({payload_path!r}))\n"
+                "DATA = open(P, 'rb').read()\n"
+                "os.remove(P)\n")
+    else:
+        load = f"DATA = base64.b64decode({base64.b64encode(data).decode('ascii')!r})\n"
     return (
         "import base64, hashlib, os, re, shutil, sys\n"
-        f"DATA = base64.b64decode({b64!r})\n"
+        + load +
         f"assert hashlib.sha256(DATA).hexdigest() == {hashlib.sha256(data).hexdigest()!r}, 'sha256 mismatch'\n"
         f"NEW = {version!r}\n"
         f"PATHS = {paths!r}\n"
@@ -2706,6 +2714,27 @@ def fleet_push_command(os_name: str) -> tuple[str, bool]:
         ]
         return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n"), True
     return "if command -v python3 >/dev/null 2>&1; then python3 -; else python -; fi", False
+
+
+def remote_scp_cmd(peer: dict, cfg: dict, blocks: list[dict], local: str, remote_path: str) -> list[str]:
+    """build_ssh_cmd 와 같은 주소·사용자·키·옵션으로 파일 하나를 보내는 scp 명령(-O: Windows OpenSSH 서버 호환)."""
+    settings = host_settings(peer, cfg, blocks)
+    ssh_cmd = build_ssh_cmd(peer, settings, cfg, BATCH_SSH_OPTS, ssh_path=ssh_bin())
+    target = ssh_cmd[-1]
+    scp = os.path.join(os.path.dirname(ssh_cmd[0]), "scp" + (".exe" if os.name == "nt" else "")) if os.path.dirname(ssh_cmd[0]) else "scp"
+    cmd = [scp, "-O", "-q"]
+    i = 1
+    while i < len(ssh_cmd) - 1:
+        a = ssh_cmd[i]
+        if a == "-p":
+            cmd += ["-P", ssh_cmd[i + 1]]
+            i += 2
+        elif a in ("-o", "-i", "-F"):
+            cmd += [a, ssh_cmd[i + 1]]
+            i += 2
+        else:
+            i += 1  # ssh 전용 플래그(-t 등)는 scp 에 넘기지 않는다
+    return cmd + [local, f"{target}:{remote_path}"]
 
 
 def fleet_push_paths(os_name: str, rows: list[tuple[str, str, str]]) -> list[str]:
@@ -2817,10 +2846,32 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
             die(f"거울의 릴리스({remote_ver})가 이 PC 의 {__version__} 보다 낡았습니다. 먼저 게시하세요(Publish-Cli.ps1).")
         print(f"서명 확인 완료: 거울의 linkmycom {remote_ver} 을(를) 밀어 넣습니다.")
 
+        import tempfile
+
         def upd(item) -> tuple[int, str]:
             r, labels, path_stale = item
             remote, sentinel = fleet_push_command(r["os"])
-            script = fleet_push_script(src, remote_ver, fleet_push_paths(r["os"], r["rows"]))
+            payload_path = None
+            if r["os"] == "windows":
+                # 큰 payload 는 scp 로 먼저 보낸다(상대 경로는 원격 홈 기준).
+                payload_path = f"AppData/Local/Temp/lmc-push-{os.getpid()}-{int(time.time())}.py"
+                with tempfile.NamedTemporaryFile("wb", prefix="lmc-push-", suffix=".py", delete=False) as f:
+                    f.write(src)
+                    local = f.name
+                try:
+                    cp = subprocess.run(remote_scp_cmd(r["peer"], cfg, blocks, local, payload_path), capture_output=True,
+                                        text=True, encoding="utf-8", errors="replace", timeout=120, stdin=subprocess.DEVNULL)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    return 255, f"scp 실패: {e}"
+                finally:
+                    try:
+                        os.remove(local)
+                    except OSError:
+                        pass
+                if cp.returncode != 0:
+                    return cp.returncode, "scp 실패: " + last_line(cp.stderr, "출력 없음")
+                payload_path = "%USERPROFILE%/" + payload_path
+            script = fleet_push_script(src, remote_ver, fleet_push_paths(r["os"], r["rows"]), payload_path)
             rc, out, err = run_remote(r["peer"], cfg, blocks, [remote], script + ("\n" + DOCTOR_STDIN_END + "\n" if sentinel else "\n"),
                                       timeout=180, ssh=ssh)
             changed = [l.split("|", 2)[1:] for l in out.splitlines() if l.startswith("LMCPUSH|")]

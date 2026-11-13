@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/jekim14/linkmycom-cli/HEAD/tools/li
 | `linkmycom send a.pdf b.zip --to jekim-1,officehermes` | Taildrop 으로 보낸다. 대상마다 `tailscale file cp <파일들> <주소>:` 한 번, 대상은 최대 3곳 병렬, 실패는 대상별로 표시. |
 | `linkmycom inbox [폴더] [--wait]` | Taildrop 으로 받은 파일을 폴더(기본 `~/Downloads`)로 옮긴다(같은 이름은 번호를 붙임). macOS 는 앱이 Downloads 에 바로 두므로 안내만. |
 | `linkmycom exec <이름\|a,b\|all> -- <명령...>` | BatchMode SSH 로 여러 PC 에 병렬 실행, 줄마다 `[이름] ` 접두어. `all`은 온라인이고 모바일이 아니며 SSH 포트가 열린 PC. 하나라도 실패하면 종료 코드 1. |
-| `linkmycom fleet status` / `fleet update [cli] [-n]` | 이 PC 와 온라인 PC 의 CLI·타워·화면공유 앱 버전 표 / 이 PC 의 CLI 보다 낡은 원격 설치본에서만 `update` 실행(`-n`: 할 일만 출력). 타워·화면공유 앱은 아직 안내만. |
+| `linkmycom fleet status` / `fleet update [cli] [-n]` | 이 PC 와 온라인 PC 의 CLI·타워·화면공유 앱 버전 표 / 이 PC 가 거울의 최신 릴리스를 받아 서명을 확인한 뒤, 이 PC 의 CLI 보다 낡은 원격 설치본(PATH 의 lmc·tower·linkmycom·tssh·~/.local/bin)에만 SSH 로 밀어 넣어 교체(`-n`: 할 일만 출력). 원격이 스스로 받게 하지 않는 이유는 SSH 세션 안의 Windows `ssh-keygen` 이 파이프 입력에서 멈추기 때문. 타워·화면공유 앱은 아직 안내만. |
 | `linkmycom display jekim-1 [list\|gather\|single\|extend]` | 여러 모니터 PC 정리. |
 | `linkmycom password` | 화면공유 영구 비밀번호를 내 모든 PC 에 한 번에 설정(직접 입력). |
 | `linkmycom export` | `~/.ssh/config`에 관리 블록을 써서 일반 `ssh pfl`도 되게 함. |

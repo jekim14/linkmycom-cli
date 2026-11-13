@@ -452,13 +452,26 @@ class FleetTests(unittest.TestCase):
         self.assertIn("pfl: linkmycom 설치본", out.getvalue())
         self.assertNotIn("mac:", out.getvalue())
         sent = []
+        stdin_seen = []
+
+        def fake_remote(p, cfg, blocks, remote, stdin_text=None, timeout=None, ssh=None):
+            sent.append(p["name"])
+            stdin_seen.append(stdin_text)
+            return 0, "LMCPUSH|C:\\x\\tower\\linkmycom.py|0.4.1->%s\n" % linkmycom.__version__, ""
+
+        # 0.4.7 부터 관리 PC 가 릴리스를 받아 서명 확인한 뒤 원격에 밀어 넣는다(원격이 스스로 받지 않는다).
         with mock.patch.object(linkmycom, "fleet_rows", return_value=rows), \
                 mock.patch.object(linkmycom, "ssh_config_blocks", return_value=[]), \
                 mock.patch.object(linkmycom, "ssh_bin", return_value="ssh"), \
-                mock.patch.object(linkmycom, "run_remote", side_effect=lambda p, *a, **k: sent.append(p["name"]) or (0, "ok", "")), \
-                redirect_stdout(io.StringIO()):
+                mock.patch.object(linkmycom, "latest_release", return_value={"tag_name": "v" + linkmycom.__version__}), \
+                mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"__version__ = 'x'\n", linkmycom.__version__)), \
+                mock.patch.object(linkmycom, "run_remote", side_effect=fake_remote), \
+                redirect_stdout(io.StringIO()) as out:
             self.assertEqual(linkmycom.cmd_fleet({}, ["update", "cli"]), 0)
         self.assertEqual(sent, ["pfl"])
+        self.assertIn("LMCPUSH", stdin_seen[0])
+        self.assertTrue(stdin_seen[0].rstrip().endswith(linkmycom.DOCTOR_STDIN_END))  # Windows 는 종료 표시 줄
+        self.assertIn("tower: 0.4.1->", out.getvalue())
         with redirect_stdout(io.StringIO()) as out:
             self.assertEqual(linkmycom.cmd_fleet({}, ["update", "native"]), 0)
         self.assertIn("Deploy-NativeHost.ps1", out.getvalue())

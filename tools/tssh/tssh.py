@@ -62,7 +62,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.4.6"
+__version__ = "0.4.7"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -906,9 +906,14 @@ def verify_signature(data: bytes, sig: bytes, namespace: str, signer: str | None
         sig_path = Path(d) / "data.sig"
         allowed.write_bytes(f"{SIGNER_IDENTITY} {signer}\n".encode("ascii", "replace"))
         sig_path.write_bytes(sig)
+        data_path = Path(d) / "data"
+        data_path.write_bytes(data)
+        # 파이프(input=)로 주면 Windows OpenSSH 세션 안의 ssh-keygen 이 끝까지 읽지 못해 30초를 다 쓴다
+        # (officehermes, 2026-11-13: 파이프 20초 초과, 파일 리디렉션 78ms). 그래서 파일을 표준 입력으로 준다.
         try:
-            r = subprocess.run([exe, "-Y", "verify", "-f", str(allowed), "-I", SIGNER_IDENTITY, "-n", namespace,
-                                "-s", str(sig_path)], input=data, capture_output=True, timeout=30)
+            with open(data_path, "rb") as fin:
+                r = subprocess.run([exe, "-Y", "verify", "-f", str(allowed), "-I", SIGNER_IDENTITY, "-n", namespace,
+                                    "-s", str(sig_path)], stdin=fin, capture_output=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired) as e:
             return False, f"ssh-keygen 을 실행하지 못했습니다: {e}"
     if r.returncode == 0:
@@ -2629,6 +2634,87 @@ def fleet_update_command(os_name: str, labels: list[str], path_stale: bool = Tru
             '[ -f "$f" ] && { python3 "$f" update || python "$f" update; }; done')
 
 
+FLEET_INSTALL_PATHS = {
+    "windows": {"tower": r"%LOCALAPPDATA%\\DeskTools\\tower\\linkmycom.py", "linkmycom": r"%LOCALAPPDATA%\\linkmycom\\linkmycom.py",
+                "tssh": r"%LOCALAPPDATA%\\tssh\\linkmycom.py"},
+    "unix": {"bin": "~/.local/bin/linkmycom", "usr": "/usr/local/bin/linkmycom"},
+}
+
+
+def fleet_push_script(data: bytes, version: str, paths: list[str]) -> str:
+    """원격에서 실행할 파이썬: 관리 PC 가 서명 확인한 새 linkmycom.py(base64)를 SHA256 으로 대조한 뒤,
+    주어진 설치 경로 중 실재하고 버전이 낮은 것만 원자적으로 바꾼다. 결과는 'LMCPUSH|경로|이전->새' 줄.
+
+    원격 PC 의 옛 CLI 가 스스로 받게 하면 SSH 세션 안의 ssh-keygen 파이프 문제(0.4.6 이하)로 멈추므로
+    검증은 관리 PC 가 하고 원격은 해시만 맞춘다. SSH 채널 자체가 인증·암호화되어 있다.
+    """
+    import base64
+    import hashlib
+
+    b64 = base64.b64encode(data).decode("ascii")
+    return (
+        "import base64, hashlib, os, re, shutil, sys\n"
+        f"DATA = base64.b64decode({b64!r})\n"
+        f"assert hashlib.sha256(DATA).hexdigest() == {hashlib.sha256(data).hexdigest()!r}, 'sha256 mismatch'\n"
+        f"NEW = {version!r}\n"
+        f"PATHS = {paths!r}\n"
+        "def ver(t):\n"
+        "    m = re.search(r'^__version__\\s*=\\s*[\"\\']([^\"\\']+)', t, re.M)\n"
+        "    return tuple(int(x) for x in re.findall(r'\\d+', m.group(1))) if m else ()\n"
+        "new_v = tuple(int(x) for x in re.findall(r'\\d+', NEW))\n"
+        "seen = set()\n"
+        "for raw in PATHS:\n"
+        "    p = os.path.expanduser(os.path.expandvars(raw))\n"
+        "    if p in seen or not os.path.isfile(p):\n"
+        "        continue\n"
+        "    seen.add(p)\n"
+        "    try:\n"
+        "        old = ver(open(p, encoding='utf-8', errors='replace').read())\n"
+        "    except OSError as e:\n"
+        "        print('LMCPUSH|%s|read failed: %s' % (p, e)); continue\n"
+        "    if old >= new_v:\n"
+        "        print('LMCPUSH|%s|already %s' % (p, '.'.join(map(str, old)))); continue\n"
+        "    tmp = p + '.new'\n"
+        "    with open(tmp, 'wb') as f:\n"
+        "        f.write(DATA)\n"
+        "    try:\n"
+        "        shutil.copymode(p, tmp)\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "    os.replace(tmp, p)\n"
+        "    print('LMCPUSH|%s|%s->%s' % (p, '.'.join(map(str, old)), NEW))\n"
+    )
+
+
+def fleet_push_command(os_name: str) -> tuple[str, bool]:
+    """(원격 명령, 표준 입력 끝에 종료 표시 줄을 붙일지). 표준 입력으로 받은 파이썬을 파일에 써서 실행한다.
+
+    Windows 는 명령줄 길이 한도(8191·32767자) 때문에 코드를 인수로 못 넘기고, 표준 입력 EOF 도 못 믿으므로
+    doctor 와 같이 종료 표시 줄까지 읽어 임시 .py 로 실행한다.
+    """
+    if os_name == "windows":
+        lines = [
+            "$py = $null",
+            "foreach ($n in @('python','python3','py')) { $c = Get-Command $n -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Source -notlike '*WindowsApps*' } | Select-Object -First 1; if ($c) { $py = $c.Source; break } }",
+            "if (-not $py) { 'LMCPUSH|python|python 3 not found'; exit 0 }",
+            "$f = Join-Path $env:TEMP ('lmc-push-' + [guid]::NewGuid().ToString('N') + '.py')",
+            "$sb = New-Object System.Text.StringBuilder",
+            "while ($null -ne ($l = [Console]::In.ReadLine())) { if ($l -eq '" + DOCTOR_STDIN_END + "') { break }; [void]$sb.AppendLine($l) }",
+            "[IO.File]::WriteAllText($f, $sb.ToString())",
+            "try { & $py $f } finally { Remove-Item $f -Force -ErrorAction SilentlyContinue }",
+        ]
+        return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n"), True
+    return "if command -v python3 >/dev/null 2>&1; then python3 -; else python -; fi", False
+
+
+def fleet_push_paths(os_name: str, rows: list[tuple[str, str, str]]) -> list[str]:
+    """밀어 넣을 설치 경로: PATH 의 lmc 가 가리키는 파일 + 고정 위치 설치본들."""
+    path = path_lmc_version(rows)
+    fixed = list(FLEET_INSTALL_PATHS["windows" if os_name == "windows" else "unix"].values())
+    return ([path[0]] if path else []) + fixed
+
+
 def fleet_rows(cfg: dict) -> list[dict]:
     blocks = ssh_config_blocks()
     peers, _ = cached_peers()
@@ -2721,12 +2807,33 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
             return 0
         blocks = ssh_config_blocks()
         ssh = ssh_bin()
+        # 관리 PC 가 릴리스를 받아 서명 확인한 뒤 그 파일을 밀어 넣는다(원격이 스스로 받게 하지 않는다).
+        repo = cfg.get("update_repo") or DEFAULT_REPO
+        try:
+            src, remote_ver = fetch_release_source(repo, latest_release(repo, timeout=15))
+        except Exception as e:  # noqa: BLE001
+            die(f"거울의 최신 릴리스를 받지 못했습니다: {e}")
+        if parse_version(remote_ver) < parse_version(__version__):
+            die(f"거울의 릴리스({remote_ver})가 이 PC 의 {__version__} 보다 낡았습니다. 먼저 게시하세요(Publish-Cli.ps1).")
+        print(f"서명 확인 완료: 거울의 linkmycom {remote_ver} 을(를) 밀어 넣습니다.")
 
         def upd(item) -> tuple[int, str]:
             r, labels, path_stale = item
-            rc, out, err = run_remote(r["peer"], cfg, blocks, [fleet_update_command(r["os"], labels, path_stale)],
+            remote, sentinel = fleet_push_command(r["os"])
+            script = fleet_push_script(src, remote_ver, fleet_push_paths(r["os"], r["rows"]))
+            rc, out, err = run_remote(r["peer"], cfg, blocks, [remote], script + ("\n" + DOCTOR_STDIN_END + "\n" if sentinel else "\n"),
                                       timeout=180, ssh=ssh)
-            return rc, last_line(out + "\n" + err if rc else out, "출력 없음")
+            changed = [l.split("|", 2)[1:] for l in out.splitlines() if l.startswith("LMCPUSH|")]
+            if rc == 0 and "python 3 not found" not in out:
+                # 원격이 Windows 면 경로 구분자가 역슬래시라 os.path 로는 Mac·Linux 에서 폴더 이름을 못 뽑는다.
+                # (f-string 안의 역슬래시는 Python 3.9 에서 문법 오류라 밖에서 자른다.)
+                def folder(p: str) -> str:
+                    parts = re.split(r"[\\/]", p)
+                    return parts[-2] if len(parts) >= 2 else p
+
+                return 0, ("; ".join(f"{folder(p)}: {what}" for p, what in changed)
+                           if changed else last_line(out, "변경 없음"))
+            return rc or 1, last_line(out + "\n" + err, "출력 없음")
 
         bad = 0
         for (r, labels, path_stale), res in zip(stale, parallel_map(upd, stale)):
@@ -2734,7 +2841,6 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
             bad += rc != 0
             print(c(f"[{r['name']}]", "36") + f" {what_of(labels, path_stale)}: "
                   + (c("OK", "32") if rc == 0 else c(f"실패({rc})", "31")) + f" {msg}")
-        print("거울에 새 릴리스가 아직 없으면 원격은 '이미 최신' 이라고 답합니다(게시는 Publish-Cli.ps1).")
         return 1 if bad else 0
     die("사용법: linkmycom fleet status [--json] | fleet update [cli|tower|native] [-n]")
 

@@ -61,9 +61,10 @@ function Write-Shim([string]$Path, [string]$Body) {
     [System.IO.File]::WriteAllText($Path, $Body, $enc)
 }
 
-# cmd.exe shims: linkmycom and its short name lmc.
-Write-Shim (Join-Path $dest "linkmycom.cmd") "@echo off`r`n`"$(Get-ShimPath $python)`" `"%~dp0linkmycom.py`" %*`r`n"
-Write-Shim (Join-Path $dest "lmc.cmd") "@echo off`r`ncall `"%~dp0linkmycom.cmd`" %*`r`n"
+# cmd.exe shims: linkmycom and its short name lmc. Both start Python directly (no nested cmd call, which cost ~0.3 s).
+$cmdShim = "@echo off`r`n`"$(Get-ShimPath $python)`" `"%~dp0linkmycom.py`" %*`r`n"
+Write-Shim (Join-Path $dest "linkmycom.cmd") $cmdShim
+Write-Shim (Join-Path $dest "lmc.cmd") $cmdShim
 
 # PowerShell wrapper: PowerShell resolves linkmycom.ps1 before linkmycom.cmd, so quoted arguments survive intact.
 # Skipped when the execution policy would refuse to run it.

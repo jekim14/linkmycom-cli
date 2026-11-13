@@ -35,7 +35,12 @@ curl -fsSL https://raw.githubusercontent.com/jekim14/linkmycom-cli/HEAD/tools/li
 | `linkmycom -n pfl` | 실행할 ssh 명령만 출력. 파이프·스크립트처럼 비대화형에서 이름이 여러 PC 에 맞으면 고르지 않고 후보를 적은 뒤 종료 코드 1. |
 | `linkmycom list`, `linkmycom last`, `linkmycom resolve pfl` | 목록, 최근 호스트 재접속, `user@주소` 출력(scp 등에 활용). |
 | `linkmycom set pfl user=ubuntu port=2222 key=~/.ssh/id alias=srv` / `linkmycom unset pfl` | 호스트별 설정 저장·삭제. `args="-A -o 'ProxyJump a b'"`처럼 따옴표로 묶은 값은 한 인자로 둡니다(Windows 경로의 역슬래시는 그대로). |
-| `linkmycom screen jekim-1 [--gather]` | 그 PC 의 화면공유 창을 연다. `set <이름> screen=<다른 이름>`으로 화면용 대상을 따로 지정. |
+| `linkmycom screen jekim-1 [--gather] [--files\|--terminal\|--forward [로컬:원격]]` | 그 PC 의 화면공유 창(또는 파일 전송·터미널·포트 전달 창)을 연다. `--gather`는 창 모으기를 기다리지 않고 뷰어를 먼저 띄운다. 앱의 포트 전달 창은 규칙을 명령줄로 받지 않아 `로컬:원격`은 안내만 한다. `set <이름> screen=<다른 이름>`으로 화면용 대상을 따로 지정. |
+| `linkmycom forward pfl 8080:80` | `ssh -N -L 8080:127.0.0.1:80`로 이 PC 의 포트를 그 PC 의 포트로 잇는다(`로컬:원격호스트:원격`도 됨, `-n`은 명령만 출력). |
+| `linkmycom send a.pdf b.zip --to jekim-1,officehermes` | Taildrop 으로 보낸다. 대상마다 `tailscale file cp <파일들> <주소>:` 한 번, 대상은 최대 3곳 병렬, 실패는 대상별로 표시. |
+| `linkmycom inbox [폴더] [--wait]` | Taildrop 으로 받은 파일을 폴더(기본 `~/Downloads`)로 옮긴다(같은 이름은 번호를 붙임). macOS 는 앱이 Downloads 에 바로 두므로 안내만. |
+| `linkmycom exec <이름\|a,b\|all> -- <명령...>` | BatchMode SSH 로 여러 PC 에 병렬 실행, 줄마다 `[이름] ` 접두어. `all`은 온라인이고 모바일이 아니며 SSH 포트가 열린 PC. 하나라도 실패하면 종료 코드 1. |
+| `linkmycom fleet status` / `fleet update [cli] [-n]` | 이 PC 와 온라인 PC 의 CLI·타워·화면공유 앱 버전 표 / 이 PC 의 CLI 보다 낡은 원격 설치본에서만 `update` 실행(`-n`: 할 일만 출력). 타워·화면공유 앱은 아직 안내만. |
 | `linkmycom display jekim-1 [list\|gather\|single\|extend]` | 여러 모니터 PC 정리. |
 | `linkmycom password` | 화면공유 영구 비밀번호를 내 모든 PC 에 한 번에 설정(직접 입력). |
 | `linkmycom export` | `~/.ssh/config`에 관리 블록을 써서 일반 `ssh pfl`도 되게 함. |
@@ -44,11 +49,11 @@ curl -fsSL https://raw.githubusercontent.com/jekim14/linkmycom-cli/HEAD/tools/li
 | `linkmycom keys show / refresh [--force]` | 내 공개키 / 서명된 목록을 받아 `authorized_keys` 관리 블록 갱신. 빈 목록은 거부하고, 관리 블록의 키가 절반 이하로 줄면 `--force`가 있어야 적용. |
 | `linkmycom keys publish --collect` | (관리 PC) 각 컴퓨터의 공개키를 모아 `~/.ssh/linkmycom-signing`으로 서명하고 거울 클론의 `tools/linkmycom/authorized_keys`·`authorized_keys.sig`를 커밋·푸시. `linkmycom config repo_dir=<거울 클론 경로>`가 필요하며 origin 이 `jekim14/linkmycom-cli`가 아니면 멈춤. |
 | `linkmycom update [--check]` | 거울의 최신 GitHub 릴리스 자산 `linkmycom.py`를 받아 서명·SHA256·문법을 확인한 뒤에만 교체. 하루 한 번 자동 확인. |
-| `linkmycom doctor [이름]` | Tailscale, sshd·22 포트, 방화벽 규칙(`tssh-OpenSSH`), `authorized_keys` 권한·내 키 등록, 게시된 키 목록 서명, CLI·타워·화면공유 앱 버전, 마지막 키 갱신을 OK/FAIL 표로. 이름을 주면 같은 점검을 그 PC 에 ssh 로 보내 실행. FAIL 이 있으면 종료 코드 1. |
+| `linkmycom doctor [이름] [--all [--json]]` | Tailscale, sshd·22 포트, 방화벽 규칙(`tssh-OpenSSH`), `authorized_keys` 권한·내 키 등록, 게시된 키 목록 서명, CLI·타워·화면공유 앱 버전, PATH 의 `lmc`(설치본이 둘이면 경고), 타워 실행, 화면공유 서비스·21118, 마지막 키 갱신과 갱신 예약 작업 실재를 OK/FAIL 표로. 이름을 주면 같은 점검을 그 PC 에 ssh 로 보내 실행. `--all`은 이 PC 와 온라인 PC 전부를 5대씩 병렬로 점검해 한 표(행 = PC)로, `--json`은 JSON 으로. FAIL 이나 접속 실패가 있으면 종료 코드 1. |
 | `linkmycom help [명령]` | 전체 또는 그 명령의 도움말. |
-| `linkmycom completion powershell\|bash\|zsh` | 자동 완성 스크립트 출력. 호스트 이름은 `list` 등 피어를 읽을 때 갱신되는 `~/.tssh/hosts.txt`에서 가져옴. PowerShell: `linkmycom completion powershell \| Out-String \| Invoke-Expression`(`$PROFILE`에 넣으면 계속), bash/zsh: `source <(linkmycom completion bash)`. |
+| `linkmycom completion powershell\|bash\|zsh` | 자동 완성 스크립트 출력. 호스트 이름은 `list` 등 피어를 읽을 때 갱신되는 `~/.tssh/hosts.txt`에서 가져옴(피어 캐시 `~/.tssh/peers.json`과 함께 갱신). PowerShell: `linkmycom completion powershell \| Out-String \| Invoke-Expression`(`$PROFILE`에 넣으면 계속), bash/zsh: `source <(linkmycom completion bash)`. |
 
-모든 명령은 `lmc`로도 됩니다. 사용자 이름은 저장값 → 기존 `~/.ssh/config`의 같은 주소 항목 → `default_user` → 현재 로그인 이름 순으로 정합니다. Tailscale CLI는 PATH, 앱 내장 CLI, Homebrew 순으로 시도해 `Running`인 것을 쓰고, macOS에서 Homebrew tailscaled와 Tailscale.app이 함께 있으면 `/var/run/tailscaled.socket`의 LocalAPI를 직접 읽습니다.
+모든 명령은 `lmc`로도 됩니다. 타워 설치본의 `bin\lmc.cmd`·`bin\linkmycom.cmd`는 `~/.tssh/state.json`에 기록한 파이썬을 바로 부르고, 그 파이썬이 사라졌으면 예전처럼 `tower\linkmycom.cmd`가 PATH 에서 찾습니다. `resolve`·`screen`·`display`·이름 접속은 45초 안의 피어 캐시(`~/.tssh/peers.json`)를 먼저 쓰고 이름이 캐시에 없으면 다시 읽습니다. Tailscale 을 읽지 못하면 오래된 캐시라도 경고와 함께 씁니다. `list`·선택기·`export`·`set`은 항상 바로 읽습니다. 사용자 이름은 저장값 → 기존 `~/.ssh/config`의 같은 주소 항목 → `default_user` → 현재 로그인 이름 순으로 정합니다. Tailscale CLI는 PATH, 앱 내장 CLI, Homebrew 순으로 시도해 `Running`인 것을 쓰고, macOS에서 Homebrew tailscaled와 Tailscale.app이 함께 있으면 `/var/run/tailscaled.socket`의 LocalAPI를 직접 읽습니다.
 
 ## 키 교환 모델
 
@@ -84,7 +89,7 @@ GitHub 계정만으로는 신뢰가 부족하므로 0.4.4 부터 목록에 서�
 python -m unittest discover -s tools/linkmycom/tests -v
 ```
 
-서명·`keys publish` 테스트는 실제 `ssh-keygen`·`git`으로 임시 키와 임시 저장소를 만들어 확인하고, 없으면 건너뜁니다. Windows 에서 `doctor` 점검 스크립트 실행 테스트는 30초쯤 걸려 `LINKMYCOM_SLOW_TESTS=1`일 때만 돕니다.
+서명·`keys publish` 테스트는 실제 `ssh-keygen`·`git`으로 임시 키와 임시 저장소를 만들어 확인하고, 없으면 건너뜁니다. Windows 에서 `doctor` 점검 스크립트 실행 테스트는 PowerShell(방화벽 조회)을 띄워 몇 초 걸려 `LINKMYCOM_SLOW_TESTS=1`일 때만 돕니다. 0.4.5 부터 점검 스크립트는 PowerShell 을 한 번만 띄워 다른 점검과 겹쳐 돌리고, `doctor`는 키 목록 받기와 점검을 함께 돌립니다.
 
 `setup`의 SSH 방화벽 규칙 `tssh-OpenSSH`는 Tailscale 대역(100.64.0.0/10, fd7a:115c:a1e0::/48)에 더해, 실행 시점에 `Get-NetAdapter`로 찾은 Tailscale 인터페이스에도 묶습니다(100.64/10 은 통신사 CGNAT 과 겹침). 새 규칙(`tssh-OpenSSH-next`)을 먼저 만든 뒤 옛 규칙을 지우고 이름을 `tssh-OpenSSH`로 바꾸며, Tailscale 인터페이스를 못 찾으면 기존 규칙을 바꾸지 않습니다.
 

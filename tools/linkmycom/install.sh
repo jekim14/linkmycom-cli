@@ -42,14 +42,21 @@ else
         echo "경고: LINKMYCOM_UNVERIFIED — 서명 확인 없이 내려받습니다: $url" >&2
         fetch "$url" "$src"
     else
-        if ! fetch "https://api.github.com/repos/$repo/releases/latest" "$tmp/release.json"; then
+        # 거울에는 tower-v*·native-v* 릴리스도 있어 /releases/latest 를 쓰지 않고 CLI 태그(v<버전>) 중 최신을 고른다.
+        if ! fetch "https://api.github.com/repos/$repo/releases?per_page=30" "$tmp/release.json"; then
             echo "$repo 의 최신 릴리스를 읽지 못했습니다. 잠시 뒤 다시 하거나 LINKMYCOM_UNVERIFIED=1 로 서명 확인 없이 설치하세요." >&2
             rm -rf "$tmp"
             exit 1
         fi
         python3 - "$tmp/release.json" "$tmp/assets" <<'PY'
-import json, sys
-rel = json.load(open(sys.argv[1], encoding="utf-8"))
+import json, re, sys
+rels = json.load(open(sys.argv[1], encoding="utf-8"))
+def ver(t):
+    return tuple(int(x) for x in re.findall(r"\d+", t))
+cands = [r for r in rels if re.match(r"^v\d+(\.\d+)+$", str(r.get("tag_name") or "")) and not r.get("draft") and not r.get("prerelease")]
+if not cands:
+    sys.exit("CLI 릴리스(v<버전>)가 없습니다.")
+rel = max(cands, key=lambda r: ver(r["tag_name"]))
 with open(sys.argv[2], "w") as f:
     f.write("tag %s\n" % rel.get("tag_name", "?"))
     for a in rel.get("assets") or []:

@@ -73,7 +73,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -988,14 +988,25 @@ def verify_signature(data: bytes, sig: bytes, namespace: str, signer: str | None
     return False, "서명이 맞지 않습니다" + (f" ({msg.splitlines()[-1]})" if msg else "")
 
 
+CLI_TAG_RE = re.compile(r"^v\d+(\.\d+)+$")
+
+
 def latest_release(repo: str, timeout: float = 10.0) -> dict:
-    """거울 저장소의 최신 GitHub 릴리스(비인증 API). 실패하면 예외."""
-    data = http_get(f"https://api.github.com/repos/{repo}/releases/latest", timeout,
+    """거울 저장소의 최신 CLI 릴리스(태그 v<버전>, 비인증 API). 실패하면 예외.
+
+    0.4.0 타워·0.6.0 앱부터 같은 거울에 tower-v*·native-v* 릴리스도 올라가므로 /releases/latest 는
+    다른 구성요소를 돌려줄 수 있다. 목록을 받아 CLI 태그 중 가장 높은 버전을 고른다.
+    """
+    data = http_get(f"https://api.github.com/repos/{repo}/releases?per_page=30", timeout,
                     {"Accept": "application/vnd.github+json"})
-    rel = json.loads(data.decode("utf-8"))
-    if not isinstance(rel, dict) or not rel.get("tag_name"):
-        raise RuntimeError(f"{repo} 의 최신 릴리스 정보를 읽지 못했습니다.")
-    return rel
+    rels = json.loads(data.decode("utf-8"))
+    if not isinstance(rels, list):
+        raise RuntimeError(f"{repo} 의 릴리스 목록을 읽지 못했습니다.")
+    cands = [r for r in rels if isinstance(r, dict) and CLI_TAG_RE.match(str(r.get("tag_name") or ""))
+             and not r.get("draft") and not r.get("prerelease")]
+    if not cands:
+        raise RuntimeError(f"{repo} 에 CLI 릴리스(v<버전>)가 없습니다.")
+    return max(cands, key=lambda r: parse_version(r["tag_name"]))
 
 
 def release_asset_url(rel: dict, name: str) -> str | None:

@@ -56,7 +56,10 @@ if (-not $src -or -not (Test-Path $src)) {
         Invoke-WebRequest -Uri $url -OutFile $downloaded -UseBasicParsing
     } else {
         try {
-            $rel = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "linkmycom-installer"; "Accept" = "application/vnd.github+json" }
+            # The mirror also carries tower-v*/native-v* releases, so pick the newest CLI tag (v<version>) ourselves.
+            $rels = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases?per_page=30" -Headers @{ "User-Agent" = "linkmycom-installer"; "Accept" = "application/vnd.github+json" }
+            $rel = @($rels | Where-Object { $_.tag_name -match '^v\d+(\.\d+)+$' -and -not $_.draft -and -not $_.prerelease } | Sort-Object { [version]($_.tag_name.Substring(1)) } -Descending | Select-Object -First 1)[0]
+            if (-not $rel) { throw "No CLI release (v<version>) found in $Repo." }
         } catch {
             throw "Could not read the latest release of $Repo ($($_.Exception.Message)). Try again later, or use -Unverified to install the raw file without a signature check."
         }

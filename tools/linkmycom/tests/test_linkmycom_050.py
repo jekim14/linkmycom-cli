@@ -66,7 +66,7 @@ class TempHome(unittest.TestCase):
 
 class BasicsTests(unittest.TestCase):
     def test_version_and_commands(self):
-        self.assertEqual(linkmycom.__version__, "0.5.0")
+        self.assertEqual(linkmycom.__version__, "0.5.1")
         for sub in ("clip", "maintain", "history", "hostkey", "sessions"):
             self.assertIn(sub, linkmycom.SUBCOMMANDS)
             self.assertIn(sub, linkmycom.COMMAND_HELP)
@@ -87,7 +87,7 @@ class BasicsTests(unittest.TestCase):
         ps = (HERE / "install.ps1").read_bytes()
         self.assertTrue(ps.isascii())  # irm | iex 로 받을 때 Latin-1 로 읽힌다
         text = ps.decode("ascii")
-        self.assertIn("releases/latest", text)
+        self.assertIn("releases?per_page=30", text)  # 거울의 tower-v*/native-v* 를 건너뛰고 CLI 태그만
         self.assertIn("-RedirectStandardInput $File", text)  # 파이프가 아니라 파일 리디렉션
         self.assertIn(linkmycom.SIGNING_PUBKEY, text)
         self.assertIn("Get-FileHash", text)
@@ -219,15 +219,15 @@ class ClipTests(TempHome):
 
 class AutoUpdateTests(TempHome):
     def test_apply_quietly_replaces_and_notifies(self):
-        st, notice = {"update_available": "0.5.1"}, []
-        with mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"src", "0.5.1")), \
+        st, notice = {"update_available": "0.5.2"}, []
+        with mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"src", "0.5.2")), \
                 mock.patch.object(linkmycom, "write_self") as ws:
             self.assertTrue(linkmycom.apply_update_quietly("r", {}, st, notice))
         ws.assert_called_once()
         self.assertEqual(ws.call_args[0][1], b"src")
-        self.assertEqual(notice, ["linkmycom 0.5.1 으로 업데이트했습니다. 다음 실행부터 적용."])
+        self.assertEqual(notice, ["linkmycom 0.5.2 으로 업데이트했습니다. 다음 실행부터 적용."])
         self.assertNotIn("update_available", st)
-        self.assertEqual(st["last_auto_update"], "0.5.1")
+        self.assertEqual(st["last_auto_update"], "0.5.2")
 
     def test_apply_failure_is_recorded_quietly(self):
         st, notice = {}, []
@@ -650,3 +650,15 @@ class RollbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LatestReleaseTests(unittest.TestCase):
+    def test_picks_newest_cli_tag_only(self):
+        """거울에 tower-v*·native-v* 가 더 최근이어도 CLI 태그(v<버전>) 중 최신을 고른다."""
+        rels = [{"tag_name": "native-v0.6.0"}, {"tag_name": "tower-v0.4.0"}, {"tag_name": "v0.4.8"},
+                {"tag_name": "v0.5.0"}, {"tag_name": "v0.5.1", "prerelease": True}, {"tag_name": "v0.4.9", "draft": True}]
+        with mock.patch.object(linkmycom, "http_get", return_value=json.dumps(rels).encode()):
+            self.assertEqual(linkmycom.latest_release("x/y")["tag_name"], "v0.5.0")
+        with mock.patch.object(linkmycom, "http_get", return_value=json.dumps([{"tag_name": "tower-v0.4.0"}]).encode()):
+            with self.assertRaises(RuntimeError):
+                linkmycom.latest_release("x/y")

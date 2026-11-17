@@ -215,7 +215,11 @@ class DoctorScriptTests(unittest.TestCase):
             took = time.time() - t
         names = [n for n, _, _ in linkmycom.parse_doctor_lines(r.stdout)]
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(names, ["cli", "path_lmc", "tower", "native"] if os.name == "nt" else ["cli", "path_lmc", "native"])
+        want = ["cli", "path_lmc", "tower", "native"] if os.name == "nt" else ["cli", "path_lmc", "native"]
+        # 0.5.0: fleet status 의 '자동 업데이트' 열을 위해 --versions 에도 auto_update 줄이 붙는다(Windows·macOS).
+        if os.name == "nt" or sys.platform == "darwin":
+            want.append("auto_update")
+        self.assertEqual(names, want)
         self.assertLess(took, 20)
 
     def test_remote_command_versions_flag(self):

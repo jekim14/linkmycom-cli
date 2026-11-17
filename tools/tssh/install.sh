@@ -23,24 +23,89 @@ tmp=""
 if [ -n "$here" ] && [ -f "$here/linkmycom.py" ]; then
     src="$here/linkmycom.py"
 else
-    url="https://raw.githubusercontent.com/$repo/$ref/tools/linkmycom/linkmycom.py"
-    tmp="$(mktemp "${TMPDIR:-/tmp}/linkmycom.XXXXXX")"
-    echo "linkmycom.py 를 내려받습니다: $url"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "$tmp" "$url"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$tmp" "$url"
+    # 거울의 최신 릴리스 자산(linkmycom.py·.sig·.sha256)을 받아 서명을 확인한 뒤에만 설치한다(CLI 의 update 와 같은 키).
+    # ssh-keygen 이나 .sig 가 없으면 SHA256 만 맞추고 경고한다. LINKMYCOM_UNVERIFIED=1 이면 예전처럼 raw 파일(ref)을 받는다.
+    fetch() {
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL -H "User-Agent: linkmycom-installer" -o "$2" "$1"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q -O "$2" "$1"
+        else
+            echo "curl 또는 wget 이 필요합니다." >&2
+            return 1
+        fi
+    }
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/linkmycom.XXXXXX")"
+    src="$tmp/linkmycom.py"
+    if [ -n "${LINKMYCOM_UNVERIFIED:-}" ]; then
+        url="https://raw.githubusercontent.com/$repo/$ref/tools/linkmycom/linkmycom.py"
+        echo "경고: LINKMYCOM_UNVERIFIED — 서명 확인 없이 내려받습니다: $url" >&2
+        fetch "$url" "$src"
     else
-        echo "curl 또는 wget 이 필요합니다." >&2
-        exit 1
+        if ! fetch "https://api.github.com/repos/$repo/releases/latest" "$tmp/release.json"; then
+            echo "$repo 의 최신 릴리스를 읽지 못했습니다. 잠시 뒤 다시 하거나 LINKMYCOM_UNVERIFIED=1 로 서명 확인 없이 설치하세요." >&2
+            rm -rf "$tmp"
+            exit 1
+        fi
+        python3 - "$tmp/release.json" "$tmp/assets" <<'PY'
+import json, sys
+rel = json.load(open(sys.argv[1], encoding="utf-8"))
+with open(sys.argv[2], "w") as f:
+    f.write("tag %s\n" % rel.get("tag_name", "?"))
+    for a in rel.get("assets") or []:
+        if a.get("name") in ("linkmycom.py", "linkmycom.py.sig", "linkmycom.py.sha256"):
+            f.write("%s %s\n" % (a["name"], a["browser_download_url"]))
+PY
+        asset() { sed -n "s|^$1 ||p" "$tmp/assets" | head -n 1; }
+        tag="$(asset tag)"
+        py_url="$(asset linkmycom.py)"
+        if [ -z "$py_url" ]; then
+            echo "릴리스 $tag 에 linkmycom.py 자산이 없습니다." >&2
+            rm -rf "$tmp"
+            exit 1
+        fi
+        echo "linkmycom.py 를 내려받습니다: $repo 릴리스 $tag"
+        fetch "$py_url" "$src"
+        verified=""
+        sig_url="$(asset linkmycom.py.sig)"
+        if [ -n "$sig_url" ] && command -v ssh-keygen >/dev/null 2>&1; then
+            fetch "$sig_url" "$tmp/linkmycom.py.sig"
+            echo "linkmycom ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGWKhtP9dXCC5mljTV/5DOf42NzaQ7EUHRAo9B+bX0+s" > "$tmp/allowed_signers"
+            if ssh-keygen -Y verify -f "$tmp/allowed_signers" -I linkmycom -n linkmycom-keys -s "$tmp/linkmycom.py.sig" < "$src" >/dev/null 2>&1; then
+                verified=1
+                echo "서명 확인 완료(linkmycom, linkmycom-keys)."
+            else
+                echo "linkmycom.py 서명 확인에 실패했습니다($tag). 설치하지 않았습니다." >&2
+                rm -rf "$tmp"
+                exit 1
+            fi
+        fi
+        sha_url="$(asset linkmycom.py.sha256)"
+        if [ -n "$sha_url" ]; then
+            fetch "$sha_url" "$tmp/linkmycom.py.sha256"
+            if ! python3 - "$src" "$tmp/linkmycom.py.sha256" <<'PY'
+import hashlib, sys
+expected = (open(sys.argv[2], encoding="utf-8").read().split() or [""])[0].lower()
+sys.exit(0 if hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest() == expected else 1)
+PY
+            then
+                echo "linkmycom.py 의 SHA256 이 linkmycom.py.sha256 과 다릅니다. 설치하지 않았습니다." >&2
+                rm -rf "$tmp"
+                exit 1
+            fi
+            [ -z "$verified" ] && echo "경고: 서명은 확인하지 못했습니다(ssh-keygen 8.1+ 또는 .sig 없음). SHA256 만 맞췄습니다." >&2
+        elif [ -z "$verified" ]; then
+            echo "서명도 SHA256 도 확인할 수 없어 설치하지 않았습니다(LINKMYCOM_UNVERIFIED=1 로 무시 가능)." >&2
+            rm -rf "$tmp"
+            exit 1
+        fi
     fi
-    src="$tmp"
 fi
 mkdir -p "$dest"
 cp "$src" "$dest/linkmycom"
 chmod 755 "$dest/linkmycom"
 ln -sf linkmycom "$dest/lmc"
-[ -n "$tmp" ] && rm -f "$tmp"
+if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
 # 옛 tssh 는 지우지 않고 linkmycom 을 부르는 넘김 파일로 바꾼다. 설정(~/.tssh)은 그대로 함께 쓴다.
 if [ -f "$dest/tssh" ] && ! sed -n 2p "$dest/tssh" | grep -q '^# linkmycom-forwarder:'; then
     python3 - "$dest/tssh" <<'PY'

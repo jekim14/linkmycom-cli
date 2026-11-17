@@ -454,16 +454,16 @@ class ScriptBuilderTests(unittest.TestCase):
         ps = linkmycom.schedule_windows_ps(r"C:\Users\김\py thon\pythonw.exe", r"C:\Users\김\it's\linkmycom.py")
         self.assertIn("-TaskName 'LinkMyCom-KeysRefresh'", ps)
         self.assertIn("it''s", ps)
-        self.assertIn("keys refresh --quiet", ps)
+        self.assertIn("maintain --quiet", ps)  # 0.5.0: 일일 작업이 maintain(키 갱신 포함)으로 넓어짐
         self.assertNotIn("RunLevel", ps)
         self.assertIn("New-ScheduledTaskAction", ps)
         plist = plistlib.loads(linkmycom.launchd_plist("/usr/bin/python3", "/Users/a b/.local/bin/linkmycom", "/tmp/l"))
         self.assertEqual(plist["Label"], linkmycom.LAUNCHD_LABEL)
         self.assertEqual(plist["ProgramArguments"], ["/usr/bin/python3", "/Users/a b/.local/bin/linkmycom",
-                                                     "keys", "refresh", "--quiet"])
+                                                     "maintain", "--quiet"])
         self.assertEqual(plist["StartCalendarInterval"], {"Hour": 9, "Minute": 0})
         service, timer = linkmycom.systemd_units("/usr/bin/python3", "/home/a b/.local/bin/linkmycom")
-        self.assertIn('ExecStart=/usr/bin/python3 "/home/a b/.local/bin/linkmycom" keys refresh --quiet', service)
+        self.assertIn('ExecStart=/usr/bin/python3 "/home/a b/.local/bin/linkmycom" maintain --quiet', service)
         self.assertIn("OnCalendar=daily", timer)
         self.assertIn("Persistent=true", timer)
 

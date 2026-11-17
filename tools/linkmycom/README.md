@@ -20,6 +20,8 @@ macOS / Linux:
 curl -fsSL https://raw.githubusercontent.com/jekim14/linkmycom-cli/HEAD/tools/linkmycom/install.sh | sh
 ```
 
+0.5.0 부터 한 줄 설치는 raw 파일 대신 거울의 최신 릴리스 자산 `linkmycom.py`·`linkmycom.py.sig`·`linkmycom.py.sha256`을 받아, CLI 의 `update`와 같은 공개키로 `ssh-keygen -Y verify`(데이터는 파일 리디렉션)가 통과한 뒤에만 설치합니다. `ssh-keygen`이나 `.sig`가 없으면 SHA256 만 맞추고 경고하며, 둘 다 안 되면 설치하지 않습니다. 릴리스를 읽지 못할 때 예전처럼 raw 파일을 받으려면 Windows `-Unverified`, macOS/Linux `LINKMYCOM_UNVERIFIED=1`.
+
 설치 끝에 `linkmycom setup`이 실행되어 그 컴퓨터를 SSH 서버로 켜고(Windows는 UAC 승인, Tailscale 대역만 허용) 키를 교환합니다. 건너뛰려면 Windows `-NoSetup`, macOS/Linux `LINKMYCOM_NO_SETUP=1`.
 
 ## 옛 tssh 에서 옮기기
@@ -33,23 +35,28 @@ curl -fsSL https://raw.githubusercontent.com/jekim14/linkmycom-cli/HEAD/tools/li
 | `linkmycom` | 목록에서 번호 또는 이름(일부)으로 골라 접속. Enter만 누르면 최근 호스트. |
 | `linkmycom pfl`, `linkmycom root@pfl`, `linkmycom -u bob -p 2222 pfl` | 바로 접속. 호스트 뒤 인자는 `ssh`에 그대로 전달 (`lmc pfl -L 8080:localhost:80`, `lmc pfl uptime`). |
 | `linkmycom -n pfl` | 실행할 ssh 명령만 출력. 파이프·스크립트처럼 비대화형에서 이름이 여러 PC 에 맞으면 고르지 않고 후보를 적은 뒤 종료 코드 1. |
-| `linkmycom list`, `linkmycom last`, `linkmycom resolve pfl` | 목록, 최근 호스트 재접속, `user@주소` 출력(scp 등에 활용). |
-| `linkmycom set pfl user=ubuntu port=2222 key=~/.ssh/id alias=srv` / `linkmycom unset pfl` | 호스트별 설정 저장·삭제. `args="-A -o 'ProxyJump a b'"`처럼 따옴표로 묶은 값은 한 인자로 둡니다(Windows 경로의 역슬래시는 그대로). |
+| `linkmycom list [--all] [--json]`, `linkmycom last`, `linkmycom resolve pfl [--json]` | 목록, 최근 호스트 재접속, `user@주소` 출력(scp 등에 활용). 목록과 선택기는 즐겨찾기(★) → 최근 접속 5대 → 온라인 → 오프라인 순이고 번호는 검색해도 바뀌지 않습니다. SSH 없는 모바일은 숨기고 `--all`이면 'SSH 없음'으로 보입니다. `list --json`은 모든 피어를 `[{name, ip, dns, os, online, cur_addr, relay, fav, last_seen}]`로(타워·Stream Deck 생성기가 읽는 고정 형식), `resolve --json`은 그 항목에 `user`·`port`·`ssh`를 더한 객체. |
+| `linkmycom set pfl user=ubuntu port=2222 key=~/.ssh/id alias=srv fav=1 forward=8080:80` / `linkmycom unset pfl` | 호스트별 설정 저장·삭제. `args="-A -o 'ProxyJump a b'"`처럼 따옴표로 묶은 값은 한 인자로 둡니다(Windows 경로의 역슬래시는 그대로). `fav=1` 즐겨찾기(`fav=0` 해제), `forward=`는 `forward <이름>`의 저장 규칙. |
+| `linkmycom history [이름] [--since 7d]` | 접속 기록 `~/.tssh/history.jsonl`(connect·screen·send·exec·forward·fleet update/rollback)을 표로. 선택기의 '최근 5대'도 여기서 고릅니다. |
+| `linkmycom clip jekim-1,officehermes [--text "..."] [--file a.pdf ...]` | 이 PC 의 클립보드(Windows `Get-Clipboard`, 파일 목록이면 파일 / macOS `pbpaste` / Linux `wl-paste`·`xclip`)나 주어진 텍스트·파일을 그 PC 들의 LinkMyCom 앱 트레이(TCP 21120, 앱 0.6.0 이상)로 보냅니다. 규약은 첫 줄 `LMCCLIP 1 <text\|files> <바이트 수> <sha256> <보낸 장비>` + 내용, 응답 `OK`/`ERR <사유>`. 대상 최대 3곳 병렬, 10초 시간 제한, 텍스트 1 MiB 까지. 파일은 Taildrop 으로 먼저 보내고 이름 목록을 보내 받는 쪽 클립보드에 파일로 올립니다. |
 | `linkmycom screen jekim-1 [--gather] [--files\|--terminal\|--forward [로컬:원격]]` | 그 PC 의 화면공유 창(또는 파일 전송·터미널·포트 전달 창)을 연다. `--gather`는 창 모으기를 기다리지 않고 뷰어를 먼저 띄운다. 앱의 포트 전달 창은 규칙을 명령줄로 받지 않아 `로컬:원격`은 안내만 한다. `set <이름> screen=<다른 이름>`으로 화면용 대상을 따로 지정. |
-| `linkmycom forward pfl 8080:80` | `ssh -N -L 8080:127.0.0.1:80`로 이 PC 의 포트를 그 PC 의 포트로 잇는다(`로컬:원격호스트:원격`도 됨, `-n`은 명령만 출력). |
+| `linkmycom forward pfl 8080:80 [--bg]` / `forward list` / `forward stop [번호\|all]` | `ssh -N -L 8080:127.0.0.1:80`로 이 PC 의 포트를 그 PC 의 포트로 잇는다(`로컬:원격호스트:원격`도 됨, `-n`은 명령만 출력). 규칙을 빼면 `set <이름> forward=...` 저장 규칙을 쓰고, `--bg`는 창 없이 띄워 pid·규칙을 `~/.tssh/forwards.json`에 남깁니다. |
+| `linkmycom hostkey reset <이름> [--yes] [-n]` | `Host key verification failed` 때 known_hosts 의 그 PC 항목(IP·DNS·이름)을 지우고 `ssh-keyscan`으로 받은 키의 지문을 보인 뒤 확인을 받아 다시 등록. exec·doctor·fleet 의 BatchMode 접속은 `StrictHostKeyChecking=accept-new`(처음 보는 키만 받음). |
+| `linkmycom sessions close [-n]` | 화면공유 세션 창(`--connect`·`--file-transfer`·`--terminal`로 뜬 linkmycom 프로세스)만 닫는다. 홈 창·트레이·서비스는 그대로. |
 | `linkmycom send a.pdf b.zip --to jekim-1,officehermes` | Taildrop 으로 보낸다. 대상마다 `tailscale file cp <파일들> <주소>:` 한 번, 대상은 최대 3곳 병렬, 실패는 대상별로 표시. |
 | `linkmycom inbox [폴더] [--wait]` | Taildrop 으로 받은 파일을 폴더(기본 `~/Downloads`)로 옮긴다(같은 이름은 번호를 붙임). macOS 는 앱이 Downloads 에 바로 두므로 안내만. |
-| `linkmycom exec <이름\|a,b\|all> -- <명령...>` | BatchMode SSH 로 여러 PC 에 병렬 실행, 줄마다 `[이름] ` 접두어. `all`은 온라인이고 모바일이 아니며 SSH 포트가 열린 PC. 하나라도 실패하면 종료 코드 1. |
-| `linkmycom fleet status` / `fleet update [cli] [-n]` | 이 PC 와 온라인 PC 의 CLI·타워·화면공유 앱 버전 표 / 이 PC 가 거울의 최신 릴리스를 받아 서명을 확인한 뒤, 이 PC 의 CLI 보다 낡은 원격 설치본(PATH 의 lmc·tower·linkmycom·tssh·~/.local/bin)에만 SSH 로 밀어 넣어 교체(`-n`: 할 일만 출력). 원격이 스스로 받게 하지 않는 이유는 SSH 세션 안의 Windows `ssh-keygen` 이 파이프 입력에서 멈추기 때문. 타워·화면공유 앱은 아직 안내만. |
+| `linkmycom exec <이름\|a,b\|all> [--os windows\|macos\|linux] [--ps] -- <명령...>` | BatchMode SSH 로 여러 PC 에 병렬 실행, 줄마다 `[이름] ` 접두어. `all`은 온라인이고 모바일이 아니며 SSH 포트가 열린 PC. `--os`는 그 OS 만, `--ps`는 Windows 대상 명령을 PowerShell `-EncodedCommand`로 감쌉니다. 하나라도 실패하면 종료 코드 1. |
+| `linkmycom fleet status` / `fleet update [cli] [-n]` / `fleet rollback <이름\|all> cli [-n]` | 이 PC 와 온라인 PC 의 CLI·타워·화면공유 앱 버전과 '자동 업데이트'(예약 작업 존재·마지막 결과) 표(파이썬 없는 Windows 는 PowerShell 점검 결과로 채움) / 이 PC 가 거울의 최신 릴리스를 받아 서명을 확인한 뒤, 이 PC 의 CLI 보다 낡은 원격 설치본(PATH 의 lmc·tower·linkmycom·tssh·~/.local/bin)에만 SSH 로 밀어 넣어 교체하고 바꾸기 전 판은 옆에 `.prev`로 남김(`-n`: 할 일만 출력) / `rollback`은 그 `.prev`로 되돌림. 원격이 스스로 받게 하지 않는 이유는 SSH 세션 안의 Windows `ssh-keygen` 이 파이프 입력에서 멈추기 때문. 타워·화면공유 앱은 아직 안내만. |
 | `linkmycom display jekim-1 [list\|gather\|single\|extend]` | 여러 모니터 PC 정리. |
 | `linkmycom password` | 화면공유 영구 비밀번호를 내 모든 PC 에 한 번에 설정(직접 입력). |
 | `linkmycom export` | `~/.ssh/config`에 관리 블록을 써서 일반 `ssh pfl`도 되게 함. |
 | `linkmycom config default_user=idonl use_magicdns=true` | 전역 설정. |
-| `linkmycom setup [--no-server] [--no-keys] [--no-schedule]` | SSH 서버 켜기 + 키 교환 + 하루 한 번 `keys refresh` 예약(Windows 예약 작업 `LinkMyCom-KeysRefresh`, macOS launchd `com.linkmycom.keys-refresh`, Linux systemd 사용자 타이머 `linkmycom-keys.timer`). |
+| `linkmycom maintain [--quiet] [-n]` | 일일 예약 작업이 부르는 유지: 키 목록 갱신 + 관리자 권한 없이 되는 복구(꺼진 타워 시작) + 결과를 `~/.tssh/state.json`의 `maintain`에 기록. sshd·방화벽처럼 관리자 권한이 필요한 항목은 기록만 하고 다음 대화형 실행 때 `doctor --fix`를 안내합니다. |
+| `linkmycom setup [--no-server] [--no-keys] [--no-schedule]` | SSH 서버 켜기 + 키 교환 + 하루 한 번 `maintain`(0.4.x 는 `keys refresh`) 예약(Windows 예약 작업 `LinkMyCom-KeysRefresh`, macOS launchd `com.linkmycom.keys-refresh`, Linux systemd 사용자 타이머 `linkmycom-keys.timer`). |
 | `linkmycom keys show / refresh [--force]` | 내 공개키 / 서명된 목록을 받아 `authorized_keys` 관리 블록 갱신. 빈 목록은 거부하고, 관리 블록의 키가 절반 이하로 줄면 `--force`가 있어야 적용. |
 | `linkmycom keys publish --collect` | (관리 PC) 각 컴퓨터의 공개키를 모아 `~/.ssh/linkmycom-signing`으로 서명하고 거울 클론의 `tools/linkmycom/authorized_keys`·`authorized_keys.sig`를 커밋·푸시. `linkmycom config repo_dir=<거울 클론 경로>`가 필요하며 origin 이 `jekim14/linkmycom-cli`가 아니면 멈춤. |
-| `linkmycom update [--check]` | 거울의 최신 GitHub 릴리스 자산 `linkmycom.py`를 받아 서명·SHA256·문법을 확인한 뒤에만 교체. 하루 한 번 자동 확인. |
-| `linkmycom doctor [이름] [--all [--json]]` | Tailscale, sshd·22 포트, 방화벽 규칙(`tssh-OpenSSH`), `authorized_keys` 권한·내 키 등록, 게시된 키 목록 서명, CLI·타워·화면공유 앱 버전, PATH 의 `lmc`(설치본이 둘이면 경고), 타워 실행, 화면공유 서비스·21118, 마지막 키 갱신과 갱신 예약 작업 실재를 OK/FAIL 표로. 이름을 주면 같은 점검을 그 PC 에 ssh 로 보내 실행. `--all`은 이 PC 와 온라인 PC 전부를 5대씩 병렬로 점검해 한 표(행 = PC)로, `--json`은 JSON 으로. FAIL 이나 접속 실패가 있으면 종료 코드 1. |
+| `linkmycom update [--check]` | 거울의 최신 GitHub 릴리스 자산 `linkmycom.py`를 받아 서명·SHA256·문법을 확인한 뒤에만 교체. 하루 한 번 자동 확인하고, 대화형 터미널이면 같은 확인 뒤 바로 교체해 "linkmycom 0.5.x 으로 업데이트했습니다. 다음 실행부터 적용." 한 줄을 보입니다(`auto_update_apply`, 기본 켬, `linkmycom config auto_update_apply=false`로 끔). 파이프·`--json` 같은 비대화형은 확인만, 자동 적용 실패는 `~/.tssh/state.json`의 `update_error`에 남깁니다. |
+| `linkmycom doctor [이름] [--json] [--all [--json]] [--fix [-n]]` | Tailscale, sshd·22 포트, 방화벽 규칙(`tssh-OpenSSH`), `authorized_keys` 권한·내 키 등록, 게시된 키 목록 서명, CLI·타워·화면공유 앱 버전, PATH 의 `lmc`(설치본이 둘이면 경고), 타워 실행, 화면공유 서비스·21118, 클립보드 수신 21120(트레이), 자동 업데이트(예약 작업 `LinkMyCom-NativeUpdate`·`LinkMyCom-TowerUpdate` / launchd `com.linkmycom.native-update`와 `update-state.json`의 `lastResult`·`checked`), 마지막 키 갱신과 갱신 예약 작업 실재를 OK/FAIL 표로. 이름을 주면 같은 점검을 그 PC 에 ssh 로 보내 실행하고, 그 PC 가 Windows 인데 파이썬이 없으면 PowerShell 만으로 sshd·방화벽·버전·21118 을 점검합니다(설치 안내 `winget install -e --id Python.Python.3.12`). `--all`은 이 PC 와 온라인 PC 전부를 5대씩 병렬로 점검해 한 표(행 = PC)로, `--json`은 JSON 으로(한 PC 는 `{name, ip, os, rows, error}`). `--fix`는 이 PC 의 줄마다 고침 하나(키 갱신 예약 → 다시 예약, 키 갱신 → keys refresh, sshd·방화벽 → 서버 설정(UAC 한 번), 타워 실행 → `Start-ControlTower -NoBrowser`, PATH 의 lmc 중복 → 묻고 지움), `-n`은 할 일만. FAIL 이나 접속 실패가 있으면 종료 코드 1. |
 | `linkmycom help [명령]` | 전체 또는 그 명령의 도움말. |
 | `linkmycom completion powershell\|bash\|zsh` | 자동 완성 스크립트 출력. 호스트 이름은 `list` 등 피어를 읽을 때 갱신되는 `~/.tssh/hosts.txt`에서 가져옴(피어 캐시 `~/.tssh/peers.json`과 함께 갱신). PowerShell: `linkmycom completion powershell \| Out-String \| Invoke-Expression`(`$PROFILE`에 넣으면 계속), bash/zsh: `source <(linkmycom completion bash)`. |
 

@@ -5,22 +5,88 @@
 # jekim14/linkmycom-cli (formerly jekim14/tssh) is the public mirror of tools/linkmycom in the private LinkMyCom repository.
 # An old tssh install in %LOCALAPPDATA%\tssh keeps its tssh command, which now forwards to linkmycom.
 # Local usage:  powershell -ExecutionPolicy Bypass -File install.ps1 [-NoPath] [-NoSetup]
+# The download comes from the latest mirror release (linkmycom.py + linkmycom.py.sig + linkmycom.py.sha256) and is installed
+# only after 'ssh-keygen -Y verify' accepts the signature (data given as a redirected file, not a pipe). Without ssh-keygen
+# or a .sig asset it falls back to the SHA256 check with a warning. -Unverified uses the old raw-file download at -Ref.
 param(
     [switch]$NoPath,
     [switch]$NoSetup,
+    [switch]$Unverified,
     [string]$Repo = "jekim14/linkmycom-cli",
     [string]$Ref = "HEAD"
 )
 
 $ErrorActionPreference = "Stop"
+# Same key and namespace as the CLI constants SIGNING_PUBKEY / SIGNER_IDENTITY / CLI_SIG_NAMESPACE.
+$SigningPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGWKhtP9dXCC5mljTV/5DOf42NzaQ7EUHRAo9B+bX0+s"
+$SignerIdentity = "linkmycom"
+$SigNamespace = "linkmycom-keys"
+
+function Find-SshKeygen {
+    $c = Get-Command ssh-keygen -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    $p = Join-Path $env:SystemRoot "System32\OpenSSH\ssh-keygen.exe"
+    if (Test-Path -LiteralPath $p) { return $p }
+    return $null
+}
+
+function Test-LinkMyComSignature([string]$File, [string]$SigFile, [string]$Keygen) {
+    $dir = Split-Path -Parent $SigFile
+    $allowed = Join-Path $dir "allowed_signers"
+    [System.IO.File]::WriteAllText($allowed, "$SignerIdentity $SigningPubKey`n", (New-Object System.Text.ASCIIEncoding))
+    $out = Join-Path $dir "verify.out"
+    $err = Join-Path $dir "verify.err"
+    # The data goes in as a redirected file. A pipe stalls ssh-keygen inside Windows OpenSSH sessions (CLI 0.4.7).
+    $p = Start-Process -FilePath $Keygen -ArgumentList @("-Y", "verify", "-f", "`"$allowed`"", "-I", $SignerIdentity, "-n", $SigNamespace, "-s", "`"$SigFile`"") `
+        -RedirectStandardInput $File -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -Wait -PassThru
+    return ($p.ExitCode -eq 0)
+}
+
 $src = if ($PSScriptRoot) { Join-Path $PSScriptRoot "linkmycom.py" } else { "" }
 $downloaded = $null
+$work = $null
 if (-not $src -or -not (Test-Path $src)) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $url = "https://raw.githubusercontent.com/$Repo/$Ref/tools/linkmycom/linkmycom.py"
-    $downloaded = Join-Path ([System.IO.Path]::GetTempPath()) ("linkmycom-" + [guid]::NewGuid().ToString("N") + ".py")
-    Write-Host "Downloading linkmycom.py from $url"
-    Invoke-WebRequest -Uri $url -OutFile $downloaded -UseBasicParsing
+    $work = Join-Path ([System.IO.Path]::GetTempPath()) ("linkmycom-install-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $work | Out-Null
+    $downloaded = Join-Path $work "linkmycom.py"
+    if ($Unverified) {
+        $url = "https://raw.githubusercontent.com/$Repo/$Ref/tools/linkmycom/linkmycom.py"
+        Write-Warning "-Unverified: downloading $url without a signature check."
+        Invoke-WebRequest -Uri $url -OutFile $downloaded -UseBasicParsing
+    } else {
+        try {
+            $rel = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "linkmycom-installer"; "Accept" = "application/vnd.github+json" }
+        } catch {
+            throw "Could not read the latest release of $Repo ($($_.Exception.Message)). Try again later, or use -Unverified to install the raw file without a signature check."
+        }
+        $assets = @{}
+        foreach ($a in $rel.assets) { $assets[$a.name] = $a.browser_download_url }
+        if (-not $assets["linkmycom.py"]) { throw "Release $($rel.tag_name) of $Repo has no linkmycom.py asset." }
+        Write-Host "Downloading linkmycom.py from release $($rel.tag_name) of $Repo"
+        Invoke-WebRequest -Uri $assets["linkmycom.py"] -OutFile $downloaded -UseBasicParsing
+        $verified = $false
+        $keygen = Find-SshKeygen
+        if ($assets["linkmycom.py.sig"] -and $keygen) {
+            $sig = Join-Path $work "linkmycom.py.sig"
+            Invoke-WebRequest -Uri $assets["linkmycom.py.sig"] -OutFile $sig -UseBasicParsing
+            if (-not (Test-LinkMyComSignature $downloaded $sig $keygen)) {
+                throw "Signature check failed for linkmycom.py ($($rel.tag_name)). Nothing was installed."
+            }
+            $verified = $true
+            Write-Host "Signature OK ($SignerIdentity, $SigNamespace)."
+        }
+        if ($assets["linkmycom.py.sha256"]) {
+            $shaFile = Join-Path $work "linkmycom.py.sha256"
+            Invoke-WebRequest -Uri $assets["linkmycom.py.sha256"] -OutFile $shaFile -UseBasicParsing
+            $expected = ((Get-Content -LiteralPath $shaFile -Raw).Trim() -split "\s+")[0].ToLower()
+            $actual = (Get-FileHash -LiteralPath $downloaded -Algorithm SHA256).Hash.ToLower()
+            if ($expected -ne $actual) { throw "SHA256 of linkmycom.py does not match linkmycom.py.sha256. Nothing was installed." }
+            if (-not $verified) { Write-Warning "Signature not checked ($(if (-not $keygen) { 'ssh-keygen not found' } else { 'no .sig asset' })); only the SHA256 matched." }
+        } elseif (-not $verified) {
+            throw "Neither a signature check nor a SHA256 file was possible for release $($rel.tag_name). Nothing was installed (use -Unverified to override)."
+        }
+    }
     $src = $downloaded
 }
 
@@ -99,7 +165,7 @@ if (-not $NoPath) {
     }
 }
 
-if ($downloaded -and (Test-Path $downloaded)) { Remove-Item $downloaded -Force }
+if ($work -and (Test-Path $work)) { Remove-Item $work -Recurse -Force }
 $installed = & $python (Join-Path $dest "linkmycom.py") version
 Write-Host "Installed: $installed  ->  $dest"
 Write-Host "Run: linkmycom  (or the short name lmc) in a new terminal"

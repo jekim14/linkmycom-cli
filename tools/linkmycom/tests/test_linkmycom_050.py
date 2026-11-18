@@ -66,7 +66,7 @@ class TempHome(unittest.TestCase):
 
 class BasicsTests(unittest.TestCase):
     def test_version_and_commands(self):
-        self.assertEqual(linkmycom.__version__, "0.5.1")
+        self.assertEqual(linkmycom.__version__, "0.5.2")
         for sub in ("clip", "maintain", "history", "hostkey", "sessions"):
             self.assertIn(sub, linkmycom.SUBCOMMANDS)
             self.assertIn(sub, linkmycom.COMMAND_HELP)
@@ -219,15 +219,15 @@ class ClipTests(TempHome):
 
 class AutoUpdateTests(TempHome):
     def test_apply_quietly_replaces_and_notifies(self):
-        st, notice = {"update_available": "0.5.2"}, []
-        with mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"src", "0.5.2")), \
+        st, notice = {"update_available": "0.5.9"}, []
+        with mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"src", "0.5.9")), \
                 mock.patch.object(linkmycom, "write_self") as ws:
             self.assertTrue(linkmycom.apply_update_quietly("r", {}, st, notice))
         ws.assert_called_once()
         self.assertEqual(ws.call_args[0][1], b"src")
-        self.assertEqual(notice, ["linkmycom 0.5.2 으로 업데이트했습니다. 다음 실행부터 적용."])
+        self.assertEqual(notice, ["linkmycom 0.5.9 으로 업데이트했습니다. 다음 실행부터 적용."])
         self.assertNotIn("update_available", st)
-        self.assertEqual(st["last_auto_update"], "0.5.2")
+        self.assertEqual(st["last_auto_update"], "0.5.9")
 
     def test_apply_failure_is_recorded_quietly(self):
         st, notice = {}, []

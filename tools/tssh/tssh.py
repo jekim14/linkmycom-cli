@@ -73,7 +73,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -2272,7 +2272,9 @@ if WIN or MAC:
     have, miss = [], []
     if WIN:
         for (name, needed), p in zip(((UPD_TASKS[0], bool(nv)), (UPD_TASKS[1], bool(tower_ver))), UPDP):
-            if finish(p, 30)[0] == 0:
+            # A standard user gets "access denied" from schtasks for the SYSTEM task, so also look for its file.
+            if finish(p, 30)[0] == 0 or os.path.exists(os.path.join(
+                    os.environ.get("SystemRoot", "C:/Windows"), "System32", "Tasks", name)):
                 have.append(name)
             elif needed:
                 miss.append(name)

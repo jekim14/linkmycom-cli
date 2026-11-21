@@ -16,18 +16,22 @@
   linkmycom unset <이름>              저장한 호스트 설정 삭제
   linkmycom resolve <이름>            user@주소 형태로 출력 (scp 등에 활용)
   linkmycom export                    ~/.ssh/config 에 linkmycom 관리 블록 기록
-  linkmycom config [키=값 ...]        전역 설정 보기/변경 (default_user, use_magicdns, update_repo, auto_update_check,
-                                 auto_update_apply)
-  linkmycom update [--check]          거울의 최신 릴리스를 서명 확인 뒤 적용(--check: 확인만). 하루 한 번 자동 확인하고
-                                 대화형이면 서명 확인 뒤 바로 교체(auto_update_apply=false 로 끔)
+  linkmycom config [키=값 ...]        전역 설정 보기/변경 (default_user, use_magicdns, update_repo, update_ref,
+                                 auto_update_check, auto_update_apply, repo_dir, keys_url, keys_signer,
+                                 ssh_options.<옵션>)
+  linkmycom update [--check]          거울의 최신 릴리스를 서명 확인 뒤 적용(--check: 확인만). 대화형 실행이면 1시간에
+                                 한 번 확인해 서명 확인 뒤 바로 교체(auto_update_apply=false 로 끔), 비대화형은 하루 한 번 확인만
+  linkmycom update --all [--check] [-n]   이 PC 의 CLI·타워·화면공유 앱을 차례로 확인·적용
+  linkmycom status [--json]           이 PC 요약(버전 3종·자동 업데이트·켜진 장비·중계·받은 파일·포트 전달)
   linkmycom version                   버전 출력
   linkmycom help [명령]               도움말(명령을 주면 그 명령만)
   linkmycom completion powershell|bash|zsh   셸 자동 완성 스크립트 출력(호스트 이름은 list 캐시)
   linkmycom doctor [이름] [--json] [--all] [--fix [-n]]   이 PC(또는 그 PC, --all: 온라인 PC 전부 병렬)의 Tailscale·sshd·방화벽·
                                  authorized_keys·버전·키 갱신 예약·화면공유 서비스·클립보드 수신·자동 업데이트 점검표
   linkmycom exec <이름|a,b|all> -- <명령...>   여러 PC 에 같은 명령을 병렬 실행([이름] 접두어, 하나라도 실패면 1)
-  linkmycom fleet status | update [cli] [-n] | rollback <이름|all> cli
-                                 각 PC 의 버전·자동 업데이트 표 / 낡은 PC 만 원격 CLI 업데이트 / .prev 로 되돌리기
+  linkmycom fleet status | update [cli] [-n] | update native|tower [--apply] | rollback <이름|all> cli
+                                 각 PC 의 버전·거울 최신 판정·자동 업데이트 표 / 낡은 PC 만 원격 CLI 업데이트 /
+                                 원격의 화면공유·타워 업데이터 시작 / .prev 로 되돌리기
   linkmycom exec ... [--os windows|macos|linux] [--ps]   OS 로 거르기, Windows 대상 PowerShell 감싸기
   linkmycom send <파일...> --to <이름,...>     Taildrop 으로 파일 보내기(대상 병렬)
   linkmycom inbox [폴더] [--wait]     Taildrop 으로 받은 파일을 폴더(기본 Downloads)로 옮기기
@@ -35,6 +39,11 @@
                                  클립보드(또는 텍스트·파일)를 그 PC 들의 LinkMyCom 앱(0.6.0 트레이, 21120)으로 보내기
   linkmycom forward <이름> [<로컬:원격>...] [--bg] | forward list | forward stop [번호|all]
                                  ssh -N -L 로 포트 잇기(--bg: 백그라운드, 규칙을 빼면 set <이름> forward=.. 저장 규칙)
+  linkmycom open <이름> [경로]        그 PC 의 공유 폴더 열기(Windows 탐색기 UNC 경로, macOS smb://)
+  linkmycom cp [-r] <원본...> <이름>:<경로> | cp <이름>:<경로>... <로컬>   scp 로 복사(Windows 대상은 scp -O)
+  linkmycom wake <이름> [--via <켜진 PC>] [-n]   doctor 가 모은 MAC 주소로 같은 LAN 의 켜진 PC 에서 매직 패킷
+  linkmycom profiles windows-terminal|iterm [-n]   PC 마다 터미널 프로필(관리 표시가 있는 파일만 다시 씀)
+  linkmycom audit [이름|all] [--since 7d] [--json]   들어온 SSH 접속을 키 주석으로 풀어 누가·언제·어디서 표
   linkmycom history [이름] [--since 7d]   접속 기록(connect·screen·send·exec·forward·fleet)
   linkmycom hostkey reset <이름>      바뀐 호스트 키를 지우고 지문 확인 뒤 다시 등록
   linkmycom sessions close [-n]       화면공유 세션 창만 닫기(홈·트레이는 그대로)
@@ -43,8 +52,8 @@
   linkmycom setup [--no-server] [--no-keys] [--no-schedule]
                                  이 컴퓨터를 SSH 서버로 켜고(Tailscale 대역만 허용) 공개키를 교환하고
                                  하루 한 번 'keys refresh' 를 예약
-  linkmycom keys [show|refresh [--force]]   내 공개키 보기 / 서명된 공개키 목록을 받아 authorized_keys 갱신
-  linkmycom keys publish [--collect]  (관리 PC) 각 컴퓨터의 공개키를 모아 서명해 거울 저장소에 게시
+  linkmycom keys [show|refresh [--force] [--quiet]]   내 공개키 보기 / 서명된 공개키 목록을 받아 authorized_keys 갱신
+  linkmycom keys collect | publish [--collect]   (관리 PC) 각 컴퓨터의 공개키를 모아(collect) 서명해 거울 저장소에 게시
 
   linkmycom screen <이름> [--gather] [--files|--terminal|--forward [로컬:원격]]
                                  LinkMyCom 화면공유 앱으로 그 PC 화면 보기(또는 파일 전송·터미널·포트 전달) 창을 연다
@@ -73,7 +82,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.5.2"
+__version__ = "0.6.0"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -104,7 +113,8 @@ MANAGED_END = "# <<< tssh managed <<<"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,253}$")
 SUBCOMMANDS = {"list", "ls", "set", "unset", "resolve", "export", "config", "update", "version", "help", "last",
                "setup", "keys", "display", "screen", "password", "doctor", "completion",
-               "send", "inbox", "exec", "fleet", "forward", "clip", "maintain", "history", "hostkey", "sessions"}
+               "send", "inbox", "exec", "fleet", "forward", "clip", "maintain", "history", "hostkey", "sessions",
+               "open", "cp", "wake", "profiles", "audit", "status"}
 HOSTS_CACHE_PATH = CONFIG_DIR / "hosts.txt"
 SSH_DIR = Path.home() / ".ssh"
 LOCAL_KEY = SSH_DIR / "id_ed25519"
@@ -1140,25 +1150,39 @@ def apply_update_quietly(repo: str, rel: dict, st: dict, notice: list[str]) -> b
     return True
 
 
+UPDATE_CHECK_INTERVAL = 86400  # 비대화형(확인만): 하루 한 번
+UPDATE_CHECK_INTERVAL_APPLY = 3600  # 대화형 자동 적용: 1시간에 한 번(0.6.0, 실행 시 자동 업데이트 계약)
+
+
+def seconds_since(stamp: str) -> float:
+    """ISO 시각 문자열부터 지금까지 초. 비었거나 읽지 못하면 아주 큰 값."""
+    try:
+        t = datetime.fromisoformat(stamp) if stamp else None
+    except ValueError:
+        t = None
+    if t is None:
+        return 1e9
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - t).total_seconds()
+
+
 def background_update_check(cfg: dict, notice: list[str], apply: bool | None = None) -> threading.Thread | None:
-    """하루 한 번 새 버전을 조용히 확인한다. 자동 적용이 허용되면 서명 확인 뒤 바로 교체하고, 아니면 notice 에 알림 한 줄."""
+    """새 버전을 조용히 확인한다. 자동 적용이 허용되면(대화형) 1시간에 한 번 확인해 서명 확인 뒤 바로 교체하고,
+    아니면 하루 한 번 확인해 notice 에 알림 한 줄. 키 갱신은 확인 주기와 상관없이 하루 한 번만 한다."""
     if not cfg.get("auto_update_check", True):
         return None
     if apply is None:
         apply = auto_apply_allowed(cfg)
     state = load_json(STATE_PATH)
-    last = state.get("last_update_check", "")
-    try:
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() if last else 1e9
-    except ValueError:
-        age = 1e9
-    if age < 86400:
+    interval = UPDATE_CHECK_INTERVAL_APPLY if apply else UPDATE_CHECK_INTERVAL
+    if seconds_since(state.get("last_update_check", "")) < interval:
         if state.get("update_available"):
             notice.append(f"새 버전 {state['update_available']} 이(가) 있습니다. 'linkmycom update' 로 적용하세요.")
         return None
 
     def work() -> None:
-        if state.get("setup_done"):
+        if state.get("setup_done") and seconds_since(state.get("last_keys_refresh", "")) >= UPDATE_CHECK_INTERVAL:
             try:
                 refresh_keys(cfg, quiet=True)  # 상태 파일에 갱신 기록을 남기므로 아래에서 다시 읽는다.
             except Exception:  # noqa: BLE001
@@ -2008,7 +2032,7 @@ def cmd_screen(peers: list[dict], cfg: dict, blocks: list[dict], args: list[str]
             warn(f"screen={alt} 에 맞는 피어가 {len(found)}개라 {peer['name']} 으로 접속합니다.")
     exe = screen_app_exe()
     if not exe:
-        die("화면공유 앱(DeskTools 또는 RustDesk) 실행 파일을 찾지 못했습니다. LinkMyCom 설치기를 먼저 실행하세요.")
+        die("화면공유 앱(LinkMyCom, 옛 설치본은 DeskTools·RustDesk) 실행 파일을 찾지 못했습니다. LinkMyCom 설치기를 먼저 실행하세요.")
     if not peer["online"]:
         warn(f"{peer['name']} 은(는) 오프라인으로 표시됩니다.")
     kind = {"--connect": "화면 보기", "--file-transfer": "파일 전송", "--terminal": "터미널",
@@ -2134,6 +2158,9 @@ if WIN and not ONLY_VERSIONS:
         "$v = Get-Service LinkMyCom; if (-not $v) { $v = Get-Service DeskTools }",
         "if ($v) { 'SVC;' + $v.Name + ';' + $v.Status } else { 'SVC;' }",
         "'TOWER;' + [bool](Get-Process ime-probe)",
+        "$c = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | "
+        "Sort-Object { $_.NetAdapter.MediaType -ne '802.3' } | Select-Object -First 1",
+        "if ($c) { 'LAN;' + $c.NetAdapter.MacAddress + ';' + @($c.IPv4Address)[0].IPAddress + ';' + @($c.IPv4Address)[0].PrefixLength } else { 'LAN;' }",
     ])])
     TASKP = start(["schtasks", "/Query", "/TN", TASK])
     NETP = start(["netstat", "-an", "-p", "TCP"])
@@ -2346,6 +2373,41 @@ if not ONLY_VERSIONS:
     else:
         out("clip_port", "SKIP", "no tray app on this OS")
 
+    # lan: MAC and IPv4/prefix of the default-route interface ('lmc wake' remembers them in ~/.tssh/macs.json).
+    lan = ("", "", "")
+    if WIN:
+        p = (PS.get("LAN") or "").split(";")
+        if len(p) >= 3 and p[0]:
+            lan = (p[0].replace("-", ":").lower(), p[1], p[2])
+    elif MAC:
+        rc, o = run(["route", "-n", "get", "default"], 10)
+        m = re.search(r"interface: (\S+)", o)
+        if m:
+            rc, o = run(["ifconfig", m.group(1)], 10)
+            e = re.search(r"ether ([0-9a-fA-F:]{17})", o)
+            i = re.search(r"inet (\d+\.\d+\.\d+\.\d+) netmask 0x([0-9a-fA-F]{8})", o)
+            # Sessions through Tailscale SSH see a masked 'ether 02:00:00:00:00:00'; networksetup still gives the real one.
+            rc, ns = run(["networksetup", "-getmacaddress", m.group(1)], 10)
+            n = re.search(r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})", ns)
+            mac = (n or e).group(1).lower() if (n or e) else ""
+            if mac and i:
+                lan = (mac, i.group(1), str(bin(int(i.group(2), 16)).count("1")))
+    else:
+        rc, o = run(["ip", "route", "show", "default"], 10)
+        m = re.search(r"\bdev (\S+)", o)
+        if m:
+            mac = (read("/sys/class/net/%s/address" % m.group(1)) or "").strip()
+            rc, o = run(["ip", "-4", "-o", "addr", "show", "dev", m.group(1)], 10)
+            i = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/(\d+)", o)
+            if mac and i:
+                lan = (mac.lower(), i.group(1), i.group(2))
+    if lan[0] in ("02:00:00:00:00:00", "00:00:00:00:00:00"):
+        out("lan", "SKIP", "MAC address is masked in this session")
+    elif lan[0]:
+        out("lan", "INFO", "mac=%s ip=%s/%s" % lan)
+    else:
+        out("lan", "SKIP", "no default-route interface found")
+
     try:
         state = json.loads(read(os.path.join(HOME, ".tssh", "state.json")) or "{}")
     except ValueError:
@@ -2387,6 +2449,7 @@ DOCTOR_LABELS = {
     "native": "화면공유 앱 버전", "keys_refresh": "마지막 키 갱신",
     "path_lmc": "PATH 의 lmc", "tower_run": "타워 실행", "screen_svc": "화면공유 서비스·21118",
     "keys_task": "키 갱신 예약", "clip_port": "클립보드 수신·21120", "auto_update": "자동 업데이트",
+    "lan": "LAN·MAC 주소", "screen_reach": "21118 도달(이 PC 에서)", "dup_node": "중복 Tailscale 노드",
 }
 DOCTOR_COLORS = {"OK": "32", "FAIL": "31", "WARN": "33", "INFO": "36", "SKIP": "90"}
 
@@ -2423,6 +2486,10 @@ WINDOWS_NOPY_DOCTOR_PS = "; ".join([
     "else { 'INFO|no updater job (native/tower not installed)' })",
     "$l = $false; try { $k = New-Object Net.Sockets.TcpClient; $k.Connect('127.0.0.1', 21118); $l = $true; $k.Close() } catch {}",
     "'LMCDOC|screen_svc|' + $(if ($l) { 'OK|21118 listening' } else { 'WARN|21118 not listening' })",
+    "$c = Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | "
+    "Sort-Object { $_.NetAdapter.MediaType -ne '802.3' } | Select-Object -First 1",
+    "'LMCDOC|lan|' + $(if ($c) { 'INFO|mac=' + $c.NetAdapter.MacAddress.Replace('-', ':').ToLower() + ' ip=' + "
+    "@($c.IPv4Address)[0].IPAddress + '/' + @($c.IPv4Address)[0].PrefixLength } else { 'SKIP|no default-route interface found' })",
 ])
 
 
@@ -2524,24 +2591,36 @@ def cmd_doctor(cfg: dict, args: list[str]) -> int:
             row = keys_row.result()
         idx = next((i for i, x in enumerate(rows) if x[0] == "cli"), len(rows))
         rows.insert(idx, row)
+        remember_lans([(None, rows)])
         if as_json:
             return print_doctor_json({"name": platform.node().split(".")[0], "ip": "(이 PC)",
                                       "os": platform.system().lower(), "rows": rows, "error": ""})
         return print_doctor(f"linkmycom doctor · 이 PC ({platform.node()}) · CLI {__version__}", rows)
     blocks = ssh_config_blocks()
-    peer, _ = pick_cached(cfg, blocks, host)
+    peer, peers = pick_cached(cfg, blocks, host)
     remote, stdin_text = doctor_remote_command(peer["os"], local_key_blob())
     if not as_json:
         print(c(f"→ {peer['name']} 에 점검 스크립트를 보냅니다...", "36"))
-    rc, out, err = run_remote(peer, cfg, blocks, [remote], stdin_text, timeout=180)
+    # 이 PC 에서 그 PC 의 21118 도달성과 같은 장비의 중복 Tailscale 노드(C8)를 원격 점검과 함께 본다.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        extra_f = pool.submit(reach_rows, peer, peers, cfg, blocks)
+        rc, out, err = run_remote(peer, cfg, blocks, [remote], stdin_text, timeout=180)
+        try:
+            extra = extra_f.result()
+        except Exception:  # noqa: BLE001 - 보조 점검이 실패해도 원격 점검 결과는 보인다
+            extra = []
     rows = parse_doctor_lines(out)
+    remember_lans([(peer["name"], rows)])
     if as_json:
-        return print_doctor_json({"name": peer["name"], "ip": peer["ip"], "os": peer["os"], "rows": rows,
+        return print_doctor_json({"name": peer["name"], "ip": peer["ip"], "os": peer["os"], "rows": rows + extra,
                                   "error": remote_rows_error(rows, err)})
     if not rows:
         reason = remote_rows_error(rows, err).replace("SSH 실패: ", "")
-        print_doctor(f"linkmycom doctor · {peer['name']}", [("ssh_port", "FAIL", f"SSH 로 들어가지 못했습니다: {reason}")])
+        print_doctor(f"linkmycom doctor · {peer['name']}", [("ssh_port", "FAIL", f"SSH 로 들어가지 못했습니다: {reason}")] + extra)
         return 1
+    rows = rows + extra
     result = print_doctor(f"linkmycom doctor · {peer['name']} ({peer['ip']})", rows)
     if any(n == "python" and s in ("WARN", "FAIL") for n, s, _ in rows):
         print(c(f"그 PC 에 파이썬 3 이 없어 일부만 점검했습니다. 설치: linkmycom exec {peer['name']} -- "
@@ -2794,6 +2873,7 @@ def cmd_doctor_all(cfg: dict, as_json: bool = False) -> int:
         results = [local] + [r if isinstance(r, dict) else
                              {"name": t["name"], "ip": t["ip"], "os": t["os"], "rows": [], "error": f"오류: {r}"}
                              for t, r in zip(targets, remote_f.result())]
+    remember_lans([(None if r is local else r["name"], r["rows"]) for r in results])
     if as_json:
         print(json.dumps([dict(r, rows=[list(x) for x in r["rows"]]) for r in results], ensure_ascii=False, indent=2))
     else:
@@ -2850,26 +2930,10 @@ def stale_installs(rows: list[tuple[str, str, str]]) -> tuple[bool, list[str]]:
     return bool(path and parse_version(path[1]) < mine), labels
 
 
-def fleet_update_command(os_name: str, labels: list[str], path_stale: bool = True) -> str:
-    """원격에서 'lmc update'(PATH 가 부르는 설치본)와, 낡은 고정 위치 설치본마다 그 설치본으로 'update' 를 돌리는 명령 한 줄.
-
-    같은 설치본을 두 번 갱신해도 두 번째는 '이미 최신' 으로 끝난다.
-    """
-    if os_name == "windows":
-        # 원격 기본 셸이 cmd.exe·PowerShell 어느 쪽이어도 되게 PowerShell -EncodedCommand 로 보낸다.
-        paths = {"linkmycom": r"$env:LOCALAPPDATA\linkmycom\linkmycom.cmd",
-                 "tower": r"$env:LOCALAPPDATA\DeskTools\tower\linkmycom.cmd"}
-        lines = (["lmc update"] if path_stale or not labels else []) + \
-            [f'& "{paths[l]}" update' for l in labels if l in paths]
-        return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n")
-    first = 'PATH="$HOME/.local/bin:/usr/local/bin:$PATH" lmc update; ' if path_stale or not labels else ""
-    return (first + 'for f in "$HOME/.local/bin/linkmycom" /usr/local/bin/linkmycom; do '
-            '[ -f "$f" ] && { python3 "$f" update || python "$f" update; }; done')
-
-
+# 원격 설치 경로. 예전엔 raw 문자열에 역슬래시를 두 겹 써서 결과 줄의 폴더 이름이 비어 보였다(0.6.0 에서 한 겹으로).
 FLEET_INSTALL_PATHS = {
-    "windows": {"tower": r"%LOCALAPPDATA%\\DeskTools\\tower\\linkmycom.py", "linkmycom": r"%LOCALAPPDATA%\\linkmycom\\linkmycom.py",
-                "tssh": r"%LOCALAPPDATA%\\tssh\\linkmycom.py"},
+    "windows": {"tower": r"%LOCALAPPDATA%\DeskTools\tower\linkmycom.py", "linkmycom": r"%LOCALAPPDATA%\linkmycom\linkmycom.py",
+                "tssh": r"%LOCALAPPDATA%\tssh\linkmycom.py"},
     "unix": {"bin": "~/.local/bin/linkmycom", "usr": "/usr/local/bin/linkmycom"},
 }
 
@@ -2953,25 +3017,39 @@ def fleet_push_command(os_name: str) -> tuple[str, bool]:
     return "if command -v python3 >/dev/null 2>&1; then python3 -; else python -; fi", False
 
 
-def remote_scp_cmd(peer: dict, cfg: dict, blocks: list[dict], local: str, remote_path: str) -> list[str]:
-    """build_ssh_cmd 와 같은 주소·사용자·키·옵션으로 파일 하나를 보내는 scp 명령(-O: Windows OpenSSH 서버 호환)."""
+def scp_base(peer: dict, cfg: dict, blocks: list[dict], extra: list[str] | None = None,
+             user: str | None = None) -> tuple[str, list[str], str]:
+    """(scp 실행 파일, build_ssh_cmd 와 같은 포트·키·-o 옵션을 scp 식으로 옮긴 인자, user@주소)."""
     settings = host_settings(peer, cfg, blocks)
-    ssh_cmd = build_ssh_cmd(peer, settings, cfg, BATCH_SSH_OPTS, ssh_path=ssh_bin())
+    ssh_cmd = build_ssh_cmd(peer, settings, cfg, extra, user=user, ssh_path=ssh_bin())
     target = ssh_cmd[-1]
     scp = os.path.join(os.path.dirname(ssh_cmd[0]), "scp" + (".exe" if os.name == "nt" else "")) if os.path.dirname(ssh_cmd[0]) else "scp"
-    cmd = [scp, "-O", "-q"]
+    opts: list[str] = []
     i = 1
     while i < len(ssh_cmd) - 1:
         a = ssh_cmd[i]
         if a == "-p":
-            cmd += ["-P", ssh_cmd[i + 1]]
+            opts += ["-P", ssh_cmd[i + 1]]
             i += 2
         elif a in ("-o", "-i", "-F"):
-            cmd += [a, ssh_cmd[i + 1]]
+            opts += [a, ssh_cmd[i + 1]]
             i += 2
         else:
             i += 1  # ssh 전용 플래그(-t 등)는 scp 에 넘기지 않는다
-    return cmd + [local, f"{target}:{remote_path}"]
+    return scp, opts, target
+
+
+def remote_scp_cmd(peer: dict, cfg: dict, blocks: list[dict], local: str, remote_path: str) -> list[str]:
+    """build_ssh_cmd 와 같은 주소·사용자·키·옵션으로 파일 하나를 보내는 scp 명령(-O: Windows OpenSSH 서버 호환)."""
+    scp, opts, target = scp_base(peer, cfg, blocks, BATCH_SSH_OPTS)
+    return [scp, "-O", "-q"] + opts + [local, f"{target}:{remote_path}"]
+
+
+def path_folder(p: str) -> str:
+    """설치 경로의 폴더 이름(fleet update 결과 줄). 원격이 Windows 면 구분자가 역슬래시라 os.path 대신 직접 자르고,
+    겹친 구분자가 만드는 빈 조각은 버린다. (f-string 안의 역슬래시는 Python 3.9 에서 문법 오류라 밖에서 자른다.)"""
+    parts = [x for x in re.split(r"[\\/]", p) if x]
+    return parts[-2] if len(parts) >= 2 else p
 
 
 def fleet_push_paths(os_name: str, rows: list[tuple[str, str, str]]) -> list[str]:
@@ -3012,9 +3090,20 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
     sub = args[0] if args else "status"
     rest = args[1:]
     if sub == "status":
-        results = fleet_rows(cfg)
+        # 각 PC 의 판을 거울의 구성요소별 최신(v*·tower-v*·native-v*)과 비교한다(C7). 거울을 못 읽으면 판정만 뺀다.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            lf = pool.submit(fetch_latest_components, cfg, 10)
+            results = fleet_rows(cfg)
+            try:
+                latest = lf.result()
+            except Exception:  # noqa: BLE001
+                latest = {}
         if "--json" in rest:
-            print(json.dumps([{k: v for k, v in r.items() if k != "peer"} | {"rows": [list(x) for x in r["rows"]]}
+            # 타워가 읽는 형식(행 목록)은 그대로 두고 행마다 latest·outdated 를 더한다.
+            print(json.dumps([dict({k: v for k, v in r.items() if k != "peer"}, rows=[list(x) for x in r["rows"]],
+                                   latest=latest, outdated=outdated_components(row_versions(r["rows"]), latest))
                               for r in results], ensure_ascii=False, indent=2))
             return 1 if any(r["error"] for r in results) else 0
         table = []
@@ -3030,22 +3119,30 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
             path = path_lmc_version(r["rows"])
             path_stale, labels = stale_installs(r["rows"])
             old = ([f"lmc {path[1]}"] if path_stale and path else []) + [f"{k} {vers[k]}" for k in labels]
-            note = c("CLI 낡음: " + ", ".join(old), "33") if old else c("OK", "32")
-            table.append([r["name"], os_label(r["os"]), path[1] if path else "-",
+            newer = [COMPONENT_LABELS[k] for k in outdated_components(row_versions(r["rows"]), latest) if k != "cli"]
+            notes = ([c("CLI 낡음: " + ", ".join(old), "33")] if old else []) + \
+                ([c("새 판: " + ", ".join(newer), "33")] if newer else [])
+            note = "; ".join(notes) if notes else c("OK", "32")
+
+            def cell(name: str) -> str:
+                v = d.get(name, "-")
+                return version_cell(v, latest.get(name, "")) if VERSION_RE.match(v or "") else v
+
+            table.append([r["name"], os_label(r["os"]), version_cell(path[1], latest.get("cli", "")) if path else "-",
                           ", ".join(f"{k} {v}" for k, v in vers.items()) or "-",
-                          d.get("tower", "-"), d.get("native", "-"), auto_update_summary(r["rows"]), note])
-        print(c(f"linkmycom fleet status · 이 PC 의 CLI {__version__}", "1"))
+                          cell("tower"), cell("native"), auto_update_summary(r["rows"]), note])
+        mirror = ", ".join(f"{COMPONENT_LABELS[k]} {latest[k]}" for k in ("cli", "tower", "native") if k in latest)
+        print(c(f"linkmycom fleet status · 이 PC 의 CLI {__version__}"
+                + (f" · 거울 최신: {mirror}" if mirror else " · 거울 최신을 읽지 못함"), "1"))
         print_table(table, ["PC", "OS", "lmc", "CLI 설치본", "타워", "화면공유", "자동 업데이트", "상태"])
         return 1 if any(r["error"] for r in results) else 0
     if sub == "update":
         what = next((a for a in rest if not a.startswith("-")), "cli")
         dry = "-n" in rest or "--dry-run" in rest
         if what in ("tower", "native"):
-            print("타워·화면공유 앱의 원격 갱신은 아직 CLI 로 하지 않습니다. 타워는 각 PC 의 타워 업데이터(Update-LinkMyCom.ps1),"
-                  " 화면공유 앱은 관리 PC 의 tools/native/Deploy-NativeHost.ps1 로 배포하세요.")
-            return 0
+            return cmd_fleet_component(cfg, what, rest)
         if what != "cli":
-            die("사용법: linkmycom fleet update [cli|tower|native] [-n]")
+            die("사용법: linkmycom fleet update [cli] [-n] | fleet update native|tower [이름|all] [--apply]")
         results = fleet_rows(cfg)
         stale = []
         for r in results:
@@ -3113,13 +3210,7 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
                                       timeout=180, ssh=ssh)
             changed = [l.split("|", 2)[1:] for l in out.splitlines() if l.startswith("LMCPUSH|")]
             if rc == 0 and "python 3 not found" not in out:
-                # 원격이 Windows 면 경로 구분자가 역슬래시라 os.path 로는 Mac·Linux 에서 폴더 이름을 못 뽑는다.
-                # (f-string 안의 역슬래시는 Python 3.9 에서 문법 오류라 밖에서 자른다.)
-                def folder(p: str) -> str:
-                    parts = re.split(r"[\\/]", p)
-                    return parts[-2] if len(parts) >= 2 else p
-
-                return 0, ("; ".join(f"{folder(p)}: {what}" for p, what in changed)
+                return 0, ("; ".join(f"{path_folder(p)}: {what}" for p, what in changed)
                            if changed else last_line(out, "변경 없음"))
             return rc or 1, last_line(out + "\n" + err, "출력 없음")
 
@@ -3133,7 +3224,8 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
         return 1 if bad else 0
     if sub == "rollback":
         return cmd_fleet_rollback(cfg, rest)
-    die("사용법: linkmycom fleet status [--json] | fleet update [cli|tower|native] [-n] | fleet rollback <이름|all> cli [-n]")
+    die("사용법: linkmycom fleet status [--json] | fleet update [cli] [-n] | fleet update native|tower [이름|all] [--apply]"
+        " | fleet rollback <이름|all> cli [-n]")
 
 
 # ---------------------------------------------------------------- 파일 보내기·받기 (Taildrop).
@@ -4164,6 +4256,1144 @@ def cmd_fleet_rollback(cfg: dict, rest: list[str]) -> int:
     return 1 if bad else 0
 
 
+# ---------------------------------------------------------------- 구성요소 판(CLI·타워·화면공유 앱)과 이 PC 의 업데이트 (update --all, C1).
+
+# 거울에는 CLI(v*)·타워(tower-v*)·화면공유 앱(native-v*) 릴리스가 함께 있다. /releases/latest 는 셋 중 아무거나 줄 수 있어
+# 목록에서 태그 접두어로 고른다.
+COMPONENT_TAGS = {"cli": "v", "tower": "tower-v", "native": "native-v"}
+COMPONENT_LABELS = {"cli": "CLI", "tower": "타워", "native": "화면공유 앱"}
+NATIVE_UPDATE_TASK = "LinkMyCom-NativeUpdate"
+TOWER_UPDATE_TASK = "LinkMyCom-TowerUpdate"
+MAC_NATIVE_UPDATER = "~/Library/Application Support/LinkMyCom/Update-Native-Mac.sh"
+VERSION_RE = re.compile(r"^\d+(?:\.\d+)+$")
+
+
+def latest_components(rels: list) -> dict[str, str]:
+    """릴리스 목록에서 구성요소별 가장 높은 판. 초안·시험판은 뺀다."""
+    out: dict[str, str] = {}
+    for comp, prefix in COMPONENT_TAGS.items():
+        pat = re.compile("^" + re.escape(prefix) + r"(\d+(?:\.\d+)+)$")
+        best = ""
+        for r in rels:
+            if not isinstance(r, dict) or r.get("draft") or r.get("prerelease"):
+                continue
+            m = pat.match(str(r.get("tag_name") or ""))
+            if m and (not best or parse_version(m.group(1)) > parse_version(best)):
+                best = m.group(1)
+        if best:
+            out[comp] = best
+    return out
+
+
+def fetch_latest_components(cfg: dict, timeout: float = 10.0) -> dict[str, str]:
+    """거울의 구성요소별 최신 판(비인증 API 한 번). 실패하면 예외."""
+    repo = cfg.get("update_repo") or DEFAULT_REPO
+    data = http_get(f"https://api.github.com/repos/{repo}/releases?per_page=100", timeout,
+                    {"Accept": "application/vnd.github+json"})
+    rels = json.loads(data.decode("utf-8"))
+    if not isinstance(rels, list):
+        raise RuntimeError(f"{repo} 의 릴리스 목록을 읽지 못했습니다.")
+    return latest_components(rels)
+
+
+def read_text_quiet(path: str | Path) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return ""
+
+
+def local_component_versions() -> dict[str, str]:
+    """이 PC 의 CLI·타워·화면공유 앱 판. 설치되지 않았으면 빈 문자열(doctor 점검 스크립트와 같은 위치를 본다)."""
+    out = {"cli": __version__, "tower": "", "native": ""}
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA", "")
+        if local:
+            try:
+                out["tower"] = str(json.loads(read_text_quiet(os.path.join(local, "DeskTools", "tower", "release.json"))
+                                              or "{}").get("version") or "")
+            except (ValueError, AttributeError):
+                pass
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        nv = read_text_quiet(os.path.join(pf, "LinkMyCom", "LINKMYCOM_VERSION")).strip()
+        if not nv and local:
+            try:
+                nv = str(json.loads(read_text_quiet(os.path.join(local, "LinkMyComNative", "current.json")) or "{}")
+                         .get("version") or "")
+            except (ValueError, AttributeError):
+                nv = ""
+        out["native"] = nv
+    elif platform.system() == "Darwin":
+        try:
+            import plistlib
+
+            with open("/Applications/LinkMyCom.app/Contents/Info.plist", "rb") as f:
+                out["native"] = str(plistlib.load(f).get("CFBundleShortVersionString") or "")
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+def update_state_paths() -> dict[str, str]:
+    """구성요소별 업데이터 상태 파일(lastResult 는 ok|deferred|error|none|installing)."""
+    if os.name == "nt":
+        return {"native": os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "LinkMyCom", "update-state.json"),
+                "tower": os.path.join(os.environ.get("LOCALAPPDATA", ""), "DeskTools", "tower", "update-state.json")}
+    if platform.system() == "Darwin":
+        return {"native": str(Path.home() / "Library" / "Application Support" / "LinkMyCom" / "update-state.json")}
+    return {}
+
+
+def read_update_state(path: str) -> dict:
+    """{'result','checked','available'}. 파일이 없으면 모두 빈 문자열."""
+    text = read_text_quiet(path)
+    try:
+        data = json.loads(text) if text.strip() else {}
+    except ValueError:
+        return {"result": "unreadable", "checked": "", "available": ""}
+    data = data if isinstance(data, dict) else {}
+    res = data.get("lastResult")
+    if isinstance(res, dict):
+        res = res.get("result") or res.get("status") or ""
+    return {"result": str(res or ""), "checked": str(data.get("checked") or "")[:16].replace("T", " "),
+            "available": str(data.get("available") or "")}
+
+
+def tower_update_script() -> Path | None:
+    if os.name != "nt":
+        return None
+    p = Path(os.environ.get("LOCALAPPDATA", "")) / "DeskTools" / "tower" / "Update-LinkMyCom.ps1"
+    return p if p.is_file() else None
+
+
+def native_task_exists() -> bool:
+    return os.path.exists(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "Tasks", NATIVE_UPDATE_TASK))
+
+
+NATIVE_TASK_REFUSED = (f"예약 작업 {NATIVE_UPDATE_TASK} 시작이 거부됐습니다. 0.7.0 이전 설치기로 깐 PC 는 일반 사용자가 시작할 수 없습니다."
+                       f" 관리자 PowerShell 에서 'schtasks /run /tn {NATIVE_UPDATE_TASK}' 를 실행하거나 새벽 자동 업데이트를 기다리세요"
+                       "(0.7.0 설치 뒤부터는 일반 권한으로 됩니다).")
+
+
+def local_update_action(comp: str) -> str:
+    """update --all 이 그 구성요소에 할 일(-n·안내용)."""
+    if comp == "cli":
+        return "거울 릴리스를 서명 확인 뒤 교체(linkmycom update)"
+    if comp == "tower":
+        return "타워 업데이터 Update-LinkMyCom.ps1 -Mirror -Auto 실행"
+    if os.name == "nt":
+        return f"예약 작업 {NATIVE_UPDATE_TASK} 시작(세션 중이면 업데이터가 미룸)"
+    return "Update-Native-Mac.sh --auto 를 백그라운드로 시작(세션 중이면 미룸)"
+
+
+def run_local_component_update(comp: str, cfg: dict) -> tuple[bool, str]:
+    """이 PC 의 구성요소 하나를 갱신한다. (성공, 안내 한 줄)."""
+    if comp == "cli":
+        try:
+            rc = cmd_update(cfg, False)
+        except SystemExit:
+            return False, "CLI 업데이트에 실패했습니다(위 오류)."
+        return rc == 0, ""
+    if comp == "tower":
+        script = tower_update_script()
+        if not script:
+            return False, "타워 업데이터(Update-LinkMyCom.ps1)를 찾지 못했습니다."
+        try:
+            rc = subprocess.call(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+                                  "-Mirror", "-Auto"], stdin=subprocess.DEVNULL)
+        except OSError as e:
+            return False, f"타워 업데이터를 실행하지 못했습니다: {e}"
+        return rc == 0, "" if rc == 0 else f"타워 업데이터 종료 코드 {rc}"
+    if os.name == "nt":
+        try:
+            r = subprocess.run(["schtasks", "/Run", "/TN", NATIVE_UPDATE_TASK], capture_output=True, text=True,
+                               errors="replace", timeout=30, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return False, f"schtasks 를 실행하지 못했습니다: {e}"
+        if r.returncode == 0:
+            return True, ("업데이터를 시작했습니다. 세션 중이면 미루고, 설치하면 앱이 잠시 닫혔다 다시 열립니다"
+                          "(진행: linkmycom status).")
+        if not native_task_exists():
+            return False, f"예약 작업 {NATIVE_UPDATE_TASK} 이 없습니다. LinkMyCom 설치기를 다시 실행하세요."
+        return False, NATIVE_TASK_REFUSED
+    script = os.path.expanduser(MAC_NATIVE_UPDATER)
+    if platform.system() == "Darwin" and os.path.isfile(script):
+        try:
+            subprocess.Popen(["/bin/bash", script, "--auto"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            return False, f"업데이터를 시작하지 못했습니다: {e}"
+        return True, "업데이터를 백그라운드로 시작했습니다(진행: linkmycom status)."
+    return False, "이 PC 에는 화면공유 앱 업데이터가 없습니다(Mac 은 앱이 설치한 Update-Native-Mac.sh)."
+
+
+def cmd_update_all(cfg: dict, check_only: bool = False, dry: bool = False) -> int:
+    """이 PC 의 CLI → 타워 → 화면공유 앱을 차례로 거울 최신과 비교하고, 새 판이 있으면 각자의 방식으로 적용한다."""
+    have = local_component_versions()
+    try:
+        latest = fetch_latest_components(cfg, timeout=15)
+    except Exception as e:  # noqa: BLE001
+        warn(f"거울의 최신 판을 읽지 못했습니다({e}). 각 업데이터가 직접 확인합니다.")
+        latest = {}
+    bad = 0
+    pending = 0
+    for comp in ("cli", "tower", "native"):
+        label = COMPONENT_LABELS[comp]
+        cur, new = have.get(comp) or "", latest.get(comp) or ""
+        if not cur:
+            print(f"{label}: 설치되지 않음")
+            continue
+        if new and parse_version(cur) >= parse_version(new):
+            print(f"{label} {cur}: " + c("최신", "32"))
+            continue
+        pending += 1
+        head = f"{label} {cur} → {new or '확인 필요'}"
+        if check_only:
+            print(c(head, "33"))
+            continue
+        if dry:
+            print(f"{head}: {local_update_action(comp)} (-n: 실행하지 않음)")
+            continue
+        print(c(f"{head}: {local_update_action(comp)}", "36"))
+        ok, msg = run_local_component_update(comp, cfg)
+        if msg:
+            print("  " + (msg if ok else c(msg, "31")))
+        bad += not ok
+    if check_only and pending:
+        print("적용하려면: linkmycom update --all")
+    return 1 if bad else 0
+
+
+# ---------------------------------------------------------------- 이 PC 요약 (status, C10).
+
+def received_log_path() -> Path | None:
+    """앱의 받은 파일 기록(received.json). 앱 lmc_received.dart 의 receivedLogPath 와 같은 위치."""
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA", "")
+        return Path(appdata) / "LinkMyCom" / "received.json" if appdata else None
+    if platform.system() == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "LinkMyCom" / "received.json"
+    return Path.home() / ".config" / "LinkMyCom" / "received.json"
+
+
+def received_counts(now: datetime | None = None) -> tuple[int, int]:
+    """(받은 파일 기록 수, 24시간 안의 수)."""
+    p = received_log_path()
+    text = read_text_quiet(p) if p else ""
+    try:
+        data = json.loads(text) if text.strip() else []
+    except ValueError:
+        return 0, 0
+    items = data.get("items") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return 0, 0
+    now = now or datetime.now(timezone.utc)
+    recent = 0
+    for it in items:
+        try:
+            at = datetime.fromisoformat(str(it.get("at", "")).replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        if (now - at).total_seconds() <= 86400:
+            recent += 1
+    return len(items), recent
+
+
+def local_time_text(stamp: str) -> str:
+    """ISO(UTC) 시각을 이 PC 시간 'MM-DD HH:MM' 로. 읽지 못하면 그대로."""
+    try:
+        t = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return stamp or ""
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t.astimezone().strftime("%m-%d %H:%M")
+
+
+def cli_auto_update_text(cfg: dict, state: dict) -> str:
+    if not cfg.get("auto_update_check", True):
+        mode = "꺼짐"
+    elif cfg.get("auto_update_apply", True):
+        mode = "대화형 실행 때 1시간마다 확인·적용"
+    else:
+        mode = "하루 한 번 확인만"
+    parts = [mode]
+    if state.get("last_update_check"):
+        parts.append("마지막 확인 " + local_time_text(state["last_update_check"]))
+    if state.get("update_available"):
+        parts.append(f"새 판 {state['update_available']}")
+    if state.get("update_error"):
+        parts.append("오류 " + str(state["update_error"])[:80])
+    return ", ".join(parts)
+
+
+def status_data(cfg: dict, latest: dict[str, str], peers: list[dict]) -> dict:
+    """status 가 보이는 값. --json 도 이 구조 그대로."""
+    state = load_json(STATE_PATH)
+    vers = local_component_versions()
+    auto = {"cli": cli_auto_update_text(cfg, state)}
+    for comp, path in update_state_paths().items():
+        auto[comp] = read_update_state(path)
+    online = [p for p in peers if p.get("online") and p.get("os") not in MOBILE_OS]
+    relayed = [p["name"] for p in online if p.get("relay") and not p.get("cur_addr")]
+    total, recent = received_counts()
+    forwards = [{"name": f.get("name", "?"), "specs": f.get("specs") or [], "pid": f["pid"]}
+                for f in load_forwards(prune=False) if pid_alive(f["pid"])]
+    return {"host": platform.node().split(".")[0], "versions": vers, "latest": latest, "auto_update": auto,
+            "devices": {"online": len(online), "total": len([p for p in peers if p.get("os") not in MOBILE_OS]),
+                        "relayed": relayed},
+            "received": {"total": total, "last24h": recent}, "forwards": forwards}
+
+
+def cmd_status(cfg: dict, args: list[str]) -> int:
+    """이 PC 한 화면 요약: 버전 3종(거울 최신과 비교)·자동 업데이트 상태·켜진 장비 수·중계 장비·받은 파일 수·포트 전달."""
+    as_json = "--json" in args
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        lf = pool.submit(fetch_latest_components, cfg, 5)
+        try:
+            peers, _ = cached_peers()
+        except SystemExit:
+            peers = []
+        try:
+            latest = lf.result()
+        except Exception:  # noqa: BLE001 - 오프라인이어도 요약은 보인다
+            latest = {}
+    data = status_data(cfg, latest, peers)
+    if as_json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    rows = []
+    for comp in ("cli", "tower", "native"):
+        cur = data["versions"].get(comp) or ""
+        auto = data["auto_update"].get(comp)
+        if isinstance(auto, dict):
+            auto_text = " ".join(x for x in (auto["result"], auto["checked"]) if x) or "기록 없음"
+            if auto.get("result") == "installing" and auto.get("available"):
+                auto_text = f"새 버전 {auto['available']} 설치 중"
+        else:
+            auto_text = auto or "-"
+        rows.append([COMPONENT_LABELS[comp], version_cell(cur, latest.get(comp, "")) if cur else "설치 안 됨",
+                     "자동 업데이트: " + auto_text if cur else "-"])
+    dev = data["devices"]
+    rows.append(["장비", f"켜짐 {dev['online']} / {dev['total']}",
+                 ("중계(직접 연결 없음): " + ", ".join(dev["relayed"])) if dev["relayed"] else "중계 장비 없음"])
+    rows.append(["받은 파일", f"{data['received']['total']}개", f"24시간 안 {data['received']['last24h']}개"])
+    fw = data["forwards"]
+    rows.append(["포트 전달", f"{len(fw)}개", "; ".join(f"{f['name']} {','.join(f['specs'])}" for f in fw) or "-"])
+    print(c(f"linkmycom status · {data['host']}", "1"))
+    print_table(rows, ["항목", "판·수", "내용"])
+    if not latest:
+        print(c("거울의 최신 판을 읽지 못해 '최신' 판정은 빠졌습니다.", "90"))
+    return 0
+
+
+# ---------------------------------------------------------------- fleet 의 구성요소 판정과 원격 업데이터 (C7).
+
+def row_versions(rows: list[tuple[str, str, str]]) -> dict[str, str]:
+    """doctor 줄에서 (PATH 의 lmc 또는 가장 높은 CLI 설치본, 타워, 화면공유 앱) 판."""
+    d = {n: det for n, _, det in rows}
+    path = path_lmc_version(rows)
+    clis = list(cli_versions(rows).values())
+    cli = path[1] if path else (max(clis, key=parse_version) if clis else "")
+
+    def ver(x: str | None) -> str:
+        x = (x or "").strip()
+        return x if VERSION_RE.match(x) else ""
+
+    return {"cli": cli, "tower": ver(d.get("tower")), "native": ver(d.get("native"))}
+
+
+def outdated_components(vers: dict[str, str], latest: dict[str, str]) -> list[str]:
+    return [k for k in ("cli", "tower", "native")
+            if vers.get(k) and latest.get(k) and parse_version(vers[k]) < parse_version(latest[k])]
+
+
+def version_cell(cur: str, new: str) -> str:
+    """표 칸: '0.5.0 최신' / '0.4.4 → 0.5.0' / 거울을 못 읽었으면 판만."""
+    if not cur:
+        return "-"
+    if not new or not VERSION_RE.match(cur):
+        return cur
+    return f"{cur} 최신" if parse_version(cur) >= parse_version(new) else f"{cur} → {new}"
+
+
+def component_update_command(what: str, os_name: str) -> str:
+    """원격에서 업데이터를 시작하는 명령 한 줄. 결과는 'LMCUPD|started|ran|denied|missing|내용' 한 줄.
+
+    Windows: 예약 작업(native: LinkMyCom-NativeUpdate(SYSTEM), tower: LinkMyCom-TowerUpdate)을 schtasks /Run 으로 시작한다.
+    SSH 세션이 끝나도 계속 돈다. 타워 작업이 없으면 타워 업데이터 스크립트를 세션 안에서 직접 돌린다.
+    Mac(native): Update-Native-Mac.sh --auto 를 nohup 으로 떼어 놓는다. 세션 중이면 두 업데이터 모두 스스로 미룬다.
+    """
+    if os_name == "windows":
+        task = NATIVE_UPDATE_TASK if what == "native" else TOWER_UPDATE_TASK
+        lines = [
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+            "$t = '" + task + "'",
+            "$has = Test-Path (Join-Path $env:SystemRoot ('System32\\Tasks\\' + $t))",
+            "if (-not $has) { schtasks /Query /TN $t 2>$null | Out-Null; $has = ($LASTEXITCODE -eq 0) }",
+            "if ($has) { $o = (schtasks /Run /TN $t 2>&1 | Out-String).Trim(); "
+            "if ($LASTEXITCODE -eq 0) { 'LMCUPD|started|' + $t } else { 'LMCUPD|denied|' + ($o -replace '\\s+', ' ') }; exit 0 }",
+        ]
+        if what == "tower":
+            lines += [
+                "$s = Join-Path $env:LOCALAPPDATA 'DeskTools\\tower\\Update-LinkMyCom.ps1'",
+                "if (Test-Path $s) { $o = & powershell -NoProfile -ExecutionPolicy Bypass -File $s -Mirror -Auto 2>&1 | "
+                "Select-Object -Last 1; 'LMCUPD|ran|' + ([string]$o -replace '\\s+', ' '); exit 0 }",
+            ]
+        lines.append("'LMCUPD|missing|' + $t")
+        return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n")
+    return ('f="$HOME/Library/Application Support/LinkMyCom/Update-Native-Mac.sh"; '
+            'if [ -f "$f" ]; then nohup /bin/bash "$f" --auto >/dev/null 2>&1 </dev/null & '
+            'echo "LMCUPD|started|Update-Native-Mac.sh"; else echo "LMCUPD|missing|Update-Native-Mac.sh"; fi')
+
+
+def component_update_result(what: str, rc: int, out: str, err: str) -> tuple[bool, str]:
+    line = next((l.strip() for l in out.splitlines() if l.startswith("LMCUPD|")), "")
+    status, _, detail = line[len("LMCUPD|"):].partition("|") if line else ("", "", "")
+    if status == "started":
+        return True, f"업데이터를 시작했습니다({detail}). 세션 중이면 업데이터가 미룹니다. 결과: linkmycom fleet status"
+    if status == "ran":
+        return True, f"타워 업데이터 실행: {detail or '출력 없음'}"
+    if status == "denied":
+        return False, NATIVE_TASK_REFUSED if what == "native" else f"예약 작업 시작이 거부됐습니다: {detail}"
+    if status == "missing":
+        return False, ("업데이터가 없습니다(" + detail + "). " +
+                       ("LinkMyCom 설치기를 다시 실행하세요." if what == "native" else "타워 패키지를 다시 설치하세요."))
+    return False, remote_rows_error([], err) if not out.strip() else last_line(out, "출력 없음")
+
+
+def cmd_fleet_component(cfg: dict, what: str, rest: list[str]) -> int:
+    """fleet update native|tower [이름|a,b|all] [--apply]: 거울 최신보다 낡은 원격 PC 의 업데이터를 SSH 로 시작한다.
+    --apply 가 없으면(-n 포함) 할 일만 보인다. 이 PC 는 'linkmycom update --all'."""
+    apply = "--apply" in rest and not ("-n" in rest or "--dry-run" in rest)
+    names = [a for a in rest if not a.startswith("-") and a != what]
+    label = COMPONENT_LABELS[what]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        lf = pool.submit(fetch_latest_components, cfg, 10)
+        results = fleet_rows(cfg)
+        try:
+            latest = lf.result()
+        except Exception as e:  # noqa: BLE001
+            warn(f"거울의 최신 판을 읽지 못했습니다({e}). 설치된 PC 모두에 업데이터를 시작합니다(업데이터가 직접 확인).")
+            latest = {}
+    blocks = ssh_config_blocks()
+    only = {p["name"] for p in resolve_targets(cfg, blocks, names[0])} if names else None
+    new = latest.get(what, "")
+    plan = []
+    for r in results:
+        if r.get("peer") is None or r.get("skipped") or r.get("error"):
+            continue
+        if only is not None and r["name"] not in only:
+            continue
+        if r["os"] not in (("windows",) if what == "tower" else ("windows", "macOS")):
+            continue
+        cur = row_versions(r["rows"]).get(what)
+        if not cur:
+            continue
+        if new and parse_version(cur) >= parse_version(new) and only is None:
+            continue
+        # 한 Mac 에 Tailscale 이 둘이면 같은 장비가 두 행으로 나온다. 업데이터는 한 번만 시작한다.
+        twin = next((p for p, _ in plan if related_nodes(r["peer"], [p["peer"]])), None)
+        if twin:
+            print(f"{r['name']}: {twin['name']} 와 같은 장비로 보여 건너뜁니다.")
+            continue
+        plan.append((r, cur))
+    for r in results:
+        if r.get("error"):
+            warn(f"{r['name']}: {r['error']} (건너뜀)")
+    if results and results[0].get("peer") is None:
+        local_cur = row_versions(results[0]["rows"]).get(what)
+        if local_cur and new and parse_version(local_cur) < parse_version(new):
+            print(f"이 PC 의 {label} {local_cur} 도 낡았습니다. 여기서는 'linkmycom update --all' 을 실행하세요.")
+    if not plan:
+        print(f"{label}을(를) 새로 받을 원격 PC 가 없습니다" + (f"(거울 최신 {new})." if new else "."))
+        return 0
+    for r, cur in plan:
+        how = (f"예약 작업 {NATIVE_UPDATE_TASK if what == 'native' else TOWER_UPDATE_TASK} 시작" if r["os"] == "windows"
+               else "Update-Native-Mac.sh --auto 시작")
+        print(f"{r['name']}: {label} {cur} → {new or '확인 필요'} · {how}")
+    if not apply:
+        print("실행하려면 --apply 를 붙이세요. 화면공유 세션 중인 PC 는 업데이터가 스스로 미룹니다.")
+        return 0
+    ssh = ssh_bin()
+    record_history("fleet update", [r["name"] for r, _ in plan], detail=f"{what} {new}".strip())
+
+    def go(item) -> tuple[bool, str]:
+        r, _ = item
+        rc, out, err = run_remote(r["peer"], cfg, blocks, [component_update_command(what, r["os"])],
+                                  timeout=900 if what == "tower" else 90, ssh=ssh)
+        return component_update_result(what, rc, out, err)
+
+    bad = 0
+    for (r, _), res in zip(plan, parallel_map(go, plan)):
+        ok, msg = res if isinstance(res, tuple) else (False, str(res))
+        bad += not ok
+        print(c(f"[{r['name']}]", "36") + " " + (c("OK", "32") if ok else c("실패", "31")) + f" {msg}")
+    return 1 if bad else 0
+
+
+# ---------------------------------------------------------------- 화면공유 도달성·중복 Tailscale 노드 (doctor <이름>, C8).
+
+SCREEN_PORT = 21118
+
+
+def node_key(text) -> str:
+    """이름 비교용: 소문자 영숫자만(한글이 든 '미니의 Mac mini' 호스트 이름은 'macmini' 가 된다)."""
+    return re.sub(r"[^a-z0-9]", "", str(text or "").lower())
+
+
+def related_nodes(peer: dict, peers: list[dict]) -> list[dict]:
+    """같은 장비의 다른 Tailscale 노드 후보: 켜져 있고 OS 가 같으며, 이름·호스트 이름이 같거나 한쪽이 다른 쪽을 품는다(5자 이상).
+
+    한 Mac 에 Homebrew tailscaled 와 Tailscale.app 이 함께 로그인하면 miniui-macmini 와 macmini('미니의 Mac mini')
+    두 노드가 생기고 화면공유(21118)는 한쪽으로만 닿는다. 호스트 이름이 서로 달라서 이름 포함 관계로 찾는다.
+    """
+    mine = {node_key(peer.get("name")), node_key(peer.get("hostname"))} - {""}
+    out = []
+    for p in peers:
+        if p.get("name") == peer.get("name") or not p.get("online") or not p.get("ip") or p.get("ip") == peer.get("ip"):
+            continue
+        if p.get("os") in MOBILE_OS or str(p.get("os", "")).lower() != str(peer.get("os", "")).lower():
+            continue
+        theirs = {node_key(p.get("name")), node_key(p.get("hostname"))} - {""}
+        if mine & theirs or any(len(a) >= 5 and len(b) >= 5 and (a in b or b in a) for a in mine for b in theirs):
+            out.append(p)
+    return out
+
+
+def host_key_blobs(ip: str, timeout: int = 5) -> set[str] | None:
+    """ssh-keyscan 으로 받은 호스트 키의 base64 부분들. ssh-keyscan 이 없거나 받지 못하면 None."""
+    exe = keyscan_bin()
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "-T", str(timeout), ip], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout + 10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    blobs = {l.split()[2] for l in r.stdout.splitlines() if not l.startswith("#") and len(l.split()) >= 3}
+    return blobs or None
+
+
+def reach_rows(peer: dict, peers: list[dict], cfg: dict, blocks: list[dict]) -> list[tuple[str, str, str]]:
+    """이 PC 에서 그 PC 의 21118 TCP 도달성(screen_reach)과, 같은 장비의 다른 노드 중 21118 이 한쪽만 열린 경우(dup_node)."""
+    reach = port_open(peer["ip"], SCREEN_PORT, 1.5)
+    desktop = peer.get("os") in ("windows", "macOS")
+    rows = [("screen_reach", "OK" if reach else ("WARN" if desktop else "INFO"),
+             f"{peer['ip']}:{SCREEN_PORT} " + ("열림" if reach else "닫힘(화면공유 앱이 꺼졌거나 이 노드로는 닿지 않음)"))]
+    alt = str(host_settings(peer, cfg, blocks).get("screen") or "")
+    for other in related_nodes(peer, peers):
+        other_reach = port_open(other["ip"], SCREEN_PORT, 1.5)
+        if other_reach == reach:
+            continue
+        mine, theirs = host_key_blobs(peer["ip"]), host_key_blobs(other["ip"])
+        if mine is not None and theirs is not None and not (mine & theirs):
+            continue  # 호스트 키가 다르면 다른 장비다
+        same = "호스트 키가 같은 같은 장비" if mine and theirs else "이름·OS 로 보아 같은 장비"
+        if reach:
+            rows.append(("dup_node", "INFO", f"{other['name']}({other['ip']}) 도 {same}의 Tailscale 노드인데 그쪽은 "
+                         f"{SCREEN_PORT} 이 닫혀 있습니다. 화면공유는 {peer['name']} 으로 하세요. Tailscale 을 하나만 남기면 정리됩니다."))
+        elif alt and node_key(alt) == node_key(other["name"]):
+            rows.append(("dup_node", "INFO", f"{other['name']}({other['ip']}) 는 {same}의 다른 노드이고 {SCREEN_PORT} 이 열려 "
+                         f"있습니다. screen={alt} 설정으로 화면공유는 그쪽으로 접속합니다."))
+        else:
+            rows.append(("dup_node", "WARN", f"{other['name']}({other['ip']}) 는 {same}의 다른 Tailscale 노드이고 {SCREEN_PORT} 이 "
+                         f"열려 있습니다. 'linkmycom set {peer['name']} screen={other['name']}' 로 화면공유를 그쪽으로 보내거나 "
+                         "Tailscale 을 하나만 남기세요."))
+    return rows
+
+
+# ---------------------------------------------------------------- MAC 주소 기억과 깨우기 (wake, C4).
+
+LAN_RE = re.compile(r"mac=([0-9a-f]{2}(?::[0-9a-f]{2}){5}) ip=(\d+\.\d+\.\d+\.\d+)/(\d+)")
+WAKE_PORT = 9
+
+
+def macs_path() -> Path:
+    return CONFIG_DIR / "macs.json"
+
+
+def lan_of(rows: list[tuple[str, str, str]]) -> dict | None:
+    """doctor 의 lan 줄('mac=.. ip=../..')을 {'mac','ip','prefix'} 로."""
+    detail = next((d for n, _, d in rows if n == "lan"), "")
+    m = LAN_RE.search(detail or "")
+    if not m or m.group(1) in ("02:00:00:00:00:00", "00:00:00:00:00:00"):  # 가려진 MAC 은 기억하지 않는다
+        return None
+    return {"mac": m.group(1), "ip": m.group(2), "prefix": int(m.group(3))}
+
+
+def self_ts_name(rows: list[tuple[str, str, str]]) -> str:
+    """이 PC 의 Tailscale 이름(doctor 의 tailscale 줄 첫 낱말)."""
+    detail = next((d for n, s, d in rows if n == "tailscale" and s == "OK"), "")
+    return (detail.split() or [""])[0].lower()
+
+
+def remember_lans(items: list[tuple[str | None, list[tuple[str, str, str]]]]) -> None:
+    """doctor 결과의 lan 줄을 ~/.tssh/macs.json 에 기억한다. 이름이 None 이면 이 PC(self). lan 줄이 없으면 쓰지 않는다."""
+    found = [(name, rows, lan_of(rows)) for name, rows in items]
+    found = [x for x in found if x[2]]
+    if not found:
+        return
+    data = load_json(macs_path())
+    hosts = data.get("hosts") if isinstance(data.get("hosts"), dict) else {}
+    now = datetime.now(timezone.utc).isoformat()[:19]
+    for name, rows, lan in found:
+        entry = dict(lan, time=now)
+        if name is None:
+            data["self"] = entry
+            name = self_ts_name(rows)
+        if name:
+            hosts[name] = entry
+    data["hosts"] = hosts
+    try:
+        save_json(macs_path(), data)
+    except OSError:
+        pass
+
+
+def magic_packet(mac: str) -> bytes:
+    hexs = re.sub(r"[^0-9a-fA-F]", "", mac or "")
+    if len(hexs) != 12:
+        raise ValueError(f"MAC 주소가 아닙니다: {mac}")
+    return b"\xff" * 6 + bytes.fromhex(hexs) * 16
+
+
+def lan_broadcast(entry: dict) -> str:
+    import ipaddress
+
+    return str(ipaddress.ip_network(f"{entry['ip']}/{int(entry['prefix'])}", strict=False).broadcast_address)
+
+
+def same_lan(a: dict, b: dict) -> bool:
+    try:
+        return int(a["prefix"]) == int(b["prefix"]) and lan_broadcast(a) == lan_broadcast(b)
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
+def send_magic(packet: bytes, bcast: str) -> int:
+    """이 PC 에서 LAN 브로드캐스트와 255.255.255.255 의 9번 포트로 보낸다. 보낸 횟수."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sent = 0
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for addr in (bcast, "255.255.255.255"):
+            try:
+                s.sendto(packet, (addr, WAKE_PORT))
+                sent += 1
+            except OSError:
+                pass
+    finally:
+        s.close()
+    return sent
+
+
+def wake_remote_command(os_name: str, packet: bytes, bcast: str) -> str:
+    """켜진 PC 에서 매직 패킷을 보내는 명령 한 줄. 결과는 'LMCWAKE|sent|횟수' 또는 'LMCWAKE|fail|..'."""
+    hexs = packet.hex()
+    if os_name == "windows":
+        lines = [
+            "$h = '" + hexs + "'",
+            "$m = New-Object byte[] " + str(len(packet)),
+            "for ($i = 0; $i -lt $m.Length; $i++) { $m[$i] = [Convert]::ToByte($h.Substring($i * 2, 2), 16) }",
+            "$u = New-Object Net.Sockets.UdpClient",
+            "$u.EnableBroadcast = $true",
+            "$n = 0",
+            "foreach ($a in @('" + bcast + "', '255.255.255.255')) { try { [void]$u.Send($m, $m.Length, $a, " + str(WAKE_PORT)
+            + "); $n++ } catch {} }",
+            "$u.Close()",
+            "if ($n) { 'LMCWAKE|sent|' + $n } else { 'LMCWAKE|fail|send failed' }",
+        ]
+        return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n")
+    code = ("import socket\n"
+            "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+            "s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)\n"
+            "p = bytes.fromhex('" + hexs + "')\n"
+            "n = 0\n"
+            "for a in ('" + bcast + "', '255.255.255.255'):\n"
+            "    try:\n"
+            "        s.sendto(p, (a, " + str(WAKE_PORT) + "))\n"
+            "        n += 1\n"
+            "    except OSError:\n"
+            "        pass\n"
+            "print('LMCWAKE|%s|%d' % ('sent' if n else 'fail', n))\n")
+    return f'python3 -c "{code}" || python -c "{code}"'
+
+
+WAKE_USAGE = "사용법: linkmycom wake <이름> [--via <켜진 PC>] [-n]"
+
+
+def cmd_wake(cfg: dict, args: list[str]) -> int:
+    """'wake <이름>': doctor 가 모아 둔 MAC 주소로 매직 패킷. 그 PC 와 같은 LAN 의 켜진 PC(또는 이 PC)에서 보낸다."""
+    via_name, rest, dry = None, [], False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--via" and i + 1 < len(args):
+            via_name = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("--via="):
+            via_name = a[len("--via="):]
+        elif a in ("-n", "--dry-run"):
+            dry = True
+        elif a.startswith("-"):
+            die(WAKE_USAGE)
+        else:
+            rest.append(a)
+        i += 1
+    if not rest:
+        die(WAKE_USAGE)
+    blocks = ssh_config_blocks()
+    peer, peers = pick_cached(cfg, blocks, rest[0])
+    data = load_json(macs_path())
+    hosts = data.get("hosts") if isinstance(data.get("hosts"), dict) else {}
+    entry = hosts.get(peer["name"])
+    if not isinstance(entry, dict):
+        die(f"{peer['name']} 의 MAC 주소 기록이 없습니다. 그 PC 가 켜져 있을 때 'linkmycom doctor {peer['name']}' 이나 "
+            "'linkmycom doctor --all' 로 모아 두세요(~/.tssh/macs.json).")
+    try:
+        packet = magic_packet(entry["mac"])
+        bcast = lan_broadcast(entry)
+    except (KeyError, ValueError, TypeError) as e:
+        die(f"macs.json 의 {peer['name']} 기록을 읽지 못했습니다: {e}")
+    via = None
+    if via_name:
+        via, _ = pick_cached(cfg, blocks, via_name)
+    else:
+        me = data.get("self")
+        if not (isinstance(me, dict) and same_lan(me, entry)):
+            cands = [p for p in ssh_capable(peers) if p["name"] != peer["name"]
+                     and isinstance(hosts.get(p["name"]), dict) and same_lan(hosts[p["name"]], entry)]
+            if cands:
+                via = cands[0]
+            else:
+                warn(f"{peer['name']} 와 같은 LAN 의 켜진 PC 를 찾지 못해 이 PC 에서 보냅니다(다른 LAN 이면 닿지 않습니다)."
+                     " --via <이름> 으로 정할 수 있습니다.")
+    where = via["name"] if via else "이 PC"
+    msg = f"{peer['name']} ({entry['mac']}, {bcast}:{WAKE_PORT}) 에 매직 패킷 ← {where}"
+    if dry:
+        print(msg + " (-n: 보내지 않음)")
+        return 0
+    if peer.get("online"):
+        print(f"{peer['name']} 은(는) 이미 켜진 것으로 보입니다. 그래도 보냅니다.")
+    print(c("→ " + msg, "36"))
+    record_history("wake", [peer["name"]], detail=f"via {where}")
+    if via is None:
+        if not send_magic(packet, bcast):
+            die("매직 패킷을 보내지 못했습니다.")
+    else:
+        rc, out, err = run_remote(via, cfg, blocks, [wake_remote_command(via["os"], packet, bcast)], timeout=60)
+        if "LMCWAKE|sent" not in out:
+            reason = last_line(out + "\n" + err, "출력 없음")
+            die(f"{via['name']} 에서 보내지 못했습니다: {reason}")
+    print("보냈습니다. 켜지기까지 30초~2분 걸립니다. 그 PC 의 BIOS·네트워크 어댑터에서 Wake-on-LAN 이 켜져 있어야 합니다.")
+    return 0
+
+
+# ---------------------------------------------------------------- 공유 폴더 열기(open, C2)와 복사(cp, C3).
+
+def share_open_cmd(peer: dict, sub_path: str = "", system: str | None = None) -> list[str]:
+    """그 PC 의 SMB 공유를 여는 명령. Windows 탐색기는 UNC(\\\\IP\\경로), macOS 는 open smb://, 그 밖은 xdg-open."""
+    import urllib.parse
+
+    system = system or platform.system()
+    p = (sub_path or "").replace("\\", "/").strip("/")
+    if system == "Windows":
+        unc = "\\\\" + peer["ip"] + ("\\" + p.replace("/", "\\") if p else "")
+        return ["explorer.exe", unc]
+    url = "smb://" + peer["ip"] + "/" + urllib.parse.quote(p, safe="/")
+    return ["open", url] if system == "Darwin" else ["xdg-open", url]
+
+
+def cmd_open(cfg: dict, args: list[str]) -> int:
+    dry = "-n" in args or "--dry-run" in args
+    rest = [a for a in args if not a.startswith("-")]
+    if not rest:
+        die("사용법: linkmycom open <이름> [공유 이름/경로] [-n]   예: linkmycom open pfl home/docs")
+    blocks = ssh_config_blocks()
+    peer, _ = pick_cached(cfg, blocks, rest[0])
+    cmd = share_open_cmd(peer, rest[1] if len(rest) > 1 else "")
+    if dry:
+        print(quote_cmd(cmd))
+        return 0
+    if not peer["online"]:
+        warn(f"{peer['name']} 은(는) 오프라인으로 표시됩니다. 그래도 엽니다.")
+    print(c(f"→ {peer['name']} 공유 폴더 {cmd[-1]}", "36"))
+    record_history("open", [peer["name"]], detail=cmd[-1])
+    try:
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        die(f"{cmd[0]} 을(를) 실행하지 못했습니다: {e}")
+    return 0
+
+
+CP_USAGE = ("사용법: linkmycom cp [-r] [-n] <로컬 원본...> <이름>:<경로>\n"
+            "        linkmycom cp [-r] [-n] <이름>:<경로>... <로컬 대상>   (경로를 비우면 그 PC 의 홈)")
+REMOTE_SPEC_RE = re.compile(r"^(?:([^@/\\:\s]+)@)?([A-Za-z0-9][A-Za-z0-9._-]*):(.*)$", re.S)
+
+
+def split_remote_spec(arg: str) -> tuple[str | None, str, str] | None:
+    """'[사용자@]이름:경로' 면 (사용자, 이름, 경로). 로컬 경로(C:\\.. 드라이브 문자, 실재하는 파일)는 None."""
+    m = REMOTE_SPEC_RE.match(arg)
+    if not m or (len(m.group(2)) == 1 and not m.group(1)) or os.path.exists(arg):
+        return None
+    return m.group(1), m.group(2), m.group(3)
+
+
+def cmd_cp(cfg: dict, args: list[str]) -> int:
+    """scp 로 한쪽이 원격인 복사. 이름을 tailnet 주소로 풀고 저장된 사용자·포트·키를 쓰며, Windows 대상은 scp -O(옛 프로토콜)."""
+    recursive = dry = False
+    pos: list[str] = []
+    for a in args:
+        if a in ("-r", "-R", "--recursive"):
+            recursive = True
+        elif a in ("-n", "--dry-run"):
+            dry = True
+        elif a.startswith("-") and a != "-":
+            die(f"알 수 없는 옵션 {a}.\n{CP_USAGE}")
+        else:
+            pos.append(a)
+    if len(pos) < 2:
+        die(CP_USAGE)
+    specs = [split_remote_spec(a) for a in pos]
+    srcs, dst = pos[:-1], pos[-1]
+    src_specs, dst_spec = specs[:-1], specs[-1]
+    if dst_spec and not any(src_specs):
+        upload, remote_specs = True, [dst_spec]
+    elif not dst_spec and all(src_specs):
+        upload, remote_specs = False, src_specs
+    else:
+        die("한쪽만 원격이어야 합니다(로컬 → 이름:경로, 또는 이름:경로 → 로컬).\n" + CP_USAGE)
+    names = {s[1] for s in remote_specs}
+    if len(names) != 1:
+        die("원격 원본은 한 PC 에서만 가져옵니다.")
+    blocks = ssh_config_blocks()
+    peer, _ = pick_cached(cfg, blocks, remote_specs[0][1])
+    scp, opts, target = scp_base(peer, cfg, blocks, user=remote_specs[0][0])
+    head = [scp] + (["-O"] if peer.get("os") == "windows" else []) + (["-r"] if recursive else []) + opts
+    if upload:
+        missing = [s for s in srcs if not os.path.exists(s)]
+        if missing and not dry:
+            die(f"보낼 파일이 없습니다: {', '.join(missing)}")
+        cmd = head + srcs + [f"{target}:{dst_spec[2]}"]
+    else:
+        cmd = head + [f"{target}:{s[2]}" for s in src_specs] + [dst]
+    if dry:
+        print(quote_cmd(cmd))
+        return 0
+    record_history("cp", [peer["name"]], detail=("→ " if upload else "← ") + " ".join(pos)[:180])
+    print(c(f"→ {'보내기' if upload else '받기'} {peer['name']} ({peer['ip']})", "36"))
+    try:
+        return subprocess.call(cmd)
+    except KeyboardInterrupt:
+        return 130
+    except OSError as e:
+        die(f"scp 를 실행하지 못했습니다: {e}")
+
+
+# ---------------------------------------------------------------- 터미널 프로필 (profiles, C5).
+
+PROFILE_MARK = "linkmycom profiles"
+PROFILE_KINDS = {"windows-terminal": "wt", "wt": "wt", "windowsterminal": "wt", "iterm": "iterm", "iterm2": "iterm"}
+
+
+def profile_targets(peers: list[dict]) -> list[dict]:
+    """프로필을 만들 PC: SSH 가 있는(모바일 아닌) 주소 있는 피어, 이름순."""
+    return sorted([p for p in peers if p.get("os") not in MOBILE_OS and p.get("ip")], key=lambda p: p["name"].lower())
+
+
+def profile_launcher() -> list[str]:
+    """프로필이 부를 명령. PATH 의 lmc 가 있으면 그것, 없으면 지금 파이썬으로 이 파일."""
+    if os.name == "nt":
+        return ["cmd.exe", "/c", "lmc"] if shutil.which("lmc") else [sys.executable, str(Path(__file__).resolve())]
+    found = shutil.which("lmc")
+    return [found] if found else [sys.executable, str(Path(__file__).resolve())]
+
+
+def profile_guid(name: str) -> str:
+    import uuid
+
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, "linkmycom-profile." + name))
+
+
+def wt_fragment(peers: list[dict], launcher: list[str]) -> dict:
+    """Windows Terminal JSON 조각(fragment). 관리 표시 키 linkmycomManaged 가 있는 파일만 다시 쓴다."""
+    return {"linkmycomManaged": PROFILE_MARK,
+            "profiles": [{"name": f"LinkMyCom · {p['name']}", "guid": "{" + profile_guid(p["name"]) + "}",
+                          "commandline": subprocess.list2cmdline(launcher + [p["name"]]), "tabTitle": p["name"],
+                          "startingDirectory": "%USERPROFILE%"} for p in profile_targets(peers)]}
+
+
+def iterm_profiles(peers: list[dict], launcher: list[str]) -> dict:
+    """iTerm2 동적 프로필(DynamicProfiles)."""
+    import shlex
+
+    return {"linkmycomManaged": PROFILE_MARK,
+            "Profiles": [{"Name": f"LinkMyCom · {p['name']}", "Guid": profile_guid(p["name"]), "Custom Command": "Yes",
+                          "Command": " ".join(shlex.quote(x) for x in launcher + [p["name"]]), "Tags": ["LinkMyCom"]}
+                         for p in profile_targets(peers)]}
+
+
+def profile_path(kind: str) -> Path:
+    if kind == "wt":
+        return (Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "Microsoft" /
+                "Windows Terminal" / "Fragments" / "LinkMyCom" / "linkmycom.json")
+    return Path.home() / "Library" / "Application Support" / "iTerm2" / "DynamicProfiles" / "linkmycom.json"
+
+
+def write_managed_profile(path: Path, data: dict) -> None:
+    """관리 표시가 있는 파일(또는 없는 파일)만 원자적으로 쓴다. 사람이 만든 파일이면 RuntimeError."""
+    if path.exists():
+        try:
+            old = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            old = None
+        if not (isinstance(old, dict) and old.get("linkmycomManaged") == PROFILE_MARK):
+            raise RuntimeError(f"{path} 는 linkmycom 이 만든 파일이 아니라 덮어쓰지 않습니다(옮기거나 지운 뒤 다시 실행).")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    replace_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def cmd_profiles(cfg: dict, args: list[str]) -> int:
+    dry = "-n" in args or "--dry-run" in args
+    rest = [a for a in args if not a.startswith("-")]
+    default = "iterm" if platform.system() == "Darwin" else "wt"
+    kind = PROFILE_KINDS.get((rest[0] if rest else "").lower(), None) if rest else default
+    if kind is None:
+        die("사용법: linkmycom profiles windows-terminal|iterm [-n]")
+    try:
+        peers, _ = cached_peers()
+    except SystemExit:
+        return 1
+    launcher = profile_launcher()
+    data = wt_fragment(peers, launcher) if kind == "wt" else iterm_profiles(peers, launcher)
+    path = profile_path(kind)
+    count = len(data["profiles" if kind == "wt" else "Profiles"])
+    if dry:
+        print(f"{path} (-n: 쓰지 않음, 프로필 {count}개)")
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    try:
+        write_managed_profile(path, data)
+    except (RuntimeError, OSError) as e:
+        die(str(e))
+    print(f"{path} 에 프로필 {count}개를 썼습니다. " +
+          ("Windows Terminal 을 다시 열면 새 탭 메뉴에 보입니다." if kind == "wt" else "iTerm2 가 바로 읽습니다(Profiles 의 LinkMyCom 태그)."))
+    return 0
+
+
+# ---------------------------------------------------------------- 들어온 SSH 접속 기록 (audit, C6).
+
+AUDIT_RE = re.compile(r"Accepted (\S+) for (\S+) from (\S+) port \d+(?: ssh2)?(?:: (\S+) (SHA256:[A-Za-z0-9+/=]+))?")
+AUDIT_TIME_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?")
+
+
+def audit_ps(seconds: int) -> str:
+    """Windows: OpenSSH/Operational 이벤트 로그에서 'Accepted' 줄을 'UTC시각Z 메시지' 로."""
+    return "\n".join([
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+        "$since = (Get-Date).AddSeconds(-" + str(int(seconds)) + ")",
+        "$ev = @()",
+        "try { $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'OpenSSH/Operational'; StartTime = $since } -ErrorAction Stop) } "
+        "catch { if ($_.FullyQualifiedErrorId -notmatch 'NoMatchingEventsFound') { 'LMCAUDERR|' + $_.Exception.Message } }",
+        "foreach ($e in $ev) { $m = [string]$e.Message; if ($m -match 'Accepted ') { "
+        "$e.TimeCreated.ToUniversalTime().ToString('s') + 'Z ' + ($m -replace '\\s+', ' ') } }",
+    ]) + "\n"
+
+
+def audit_sh(seconds: int) -> str:
+    """macOS: 통합 로그(log show), Linux: journalctl(없거나 권한이 없으면 auth.log·secure)."""
+    mins = max(1, int(seconds) // 60)
+    return ('if [ "$(uname)" = Darwin ]; then '
+            # zsh 에는 같은 이름의 내장 명령 log 가 있고, sshd-session 의 Accepted 줄은 Info 수준이라 --info 가 있어야 보인다.
+            f"/usr/bin/log show --style syslog --info --last {mins}m --predicate "
+            "'process BEGINSWITH \"sshd\" AND eventMessage CONTAINS \"Accepted\"' 2>/dev/null | grep 'Accepted '; "
+            "else { "
+            f"journalctl -o short-iso --no-pager --since=-{int(seconds)}s _COMM=sshd _COMM=sshd-session 2>/dev/null"
+            " || cat /var/log/auth.log /var/log/secure 2>/dev/null; } | grep 'Accepted '; fi; true")
+
+
+def audit_remote_command(os_name: str, seconds: int) -> str:
+    if os_name == "windows":
+        return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps(audit_ps(seconds))
+    return audit_sh(seconds)
+
+
+def parse_audit(text: str, pc: str) -> tuple[list[dict], list[str]]:
+    """로그 줄에서 접속 기록과 오류('LMCAUDERR|..'). 시각을 읽지 못한 줄은 time=None, raw_time 에 앞부분."""
+    events: list[dict] = []
+    errors: list[str] = []
+    for line in (text or "").splitlines():
+        if line.startswith("LMCAUDERR|"):
+            errors.append(line[len("LMCAUDERR|"):].strip())
+            continue
+        m = AUDIT_RE.search(line)
+        if not m:
+            continue
+        when = None
+        t = AUDIT_TIME_RE.search(line[:48])
+        if t:
+            tz = t.group(3) or ""
+            if tz == "Z":
+                tz = "+00:00"
+            elif tz and ":" not in tz:
+                tz = tz[:3] + ":" + tz[3:]
+            try:
+                when = datetime.fromisoformat(f"{t.group(1)}T{t.group(2)}{tz}")
+                if when.tzinfo is None:
+                    when = when.astimezone()
+            except ValueError:
+                when = None
+        events.append({"pc": pc, "time": when, "raw_time": line[:19], "method": m.group(1), "user": m.group(2),
+                       "from": m.group(3), "key_type": m.group(4) or "", "fp": m.group(5) or ""})
+    return events, errors
+
+
+def key_fingerprint(line: str) -> tuple[str, str]:
+    """공개키 한 줄의 (SHA256 지문, 주석). sshd 로그의 'SHA256:...' 과 같은 형식. 키가 아니면 ('', '')."""
+    import base64
+    import hashlib
+
+    parts = line.strip().split()
+    for i, tok in enumerate(parts[:-1]):
+        if (tok + " ").startswith(KEY_PREFIXES) or tok.startswith(("sk-", "ecdsa-sha2-")):
+            try:
+                blob = base64.b64decode(parts[i + 1], validate=True)
+            except ValueError:
+                return "", ""
+            fp = "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
+            return fp, " ".join(parts[i + 2:])
+    return "", ""
+
+
+def key_comments(cfg: dict, fetch: bool = True) -> dict[str, str]:
+    """지문 → 키 주석(예: tssh@miniui-Macmini). 게시된 서명 목록 + 이 PC 의 authorized_keys·~/.ssh/*.pub."""
+    lines: list[str] = []
+    if fetch:
+        try:
+            lines += fetch_remote_keys(cfg, timeout=8)
+        except Exception:  # noqa: BLE001 - 목록을 못 받아도 지문은 보인다
+            pass
+    paths = [SSH_DIR / "authorized_keys"]
+    try:
+        paths += sorted(SSH_DIR.glob("*.pub"))
+    except OSError:
+        pass
+    for p in paths:
+        lines += read_text_quiet(p).splitlines()
+    out: dict[str, str] = {}
+    for line in lines:
+        fp, comment = key_fingerprint(line)
+        if fp:
+            out.setdefault(fp, comment or "(주석 없음)")
+    return out
+
+
+AUDIT_USAGE = "사용법: linkmycom audit [이름|이름,이름|all] [--since 7d] [--json]"
+
+
+def cmd_audit(cfg: dict, args: list[str]) -> int:
+    """들어온 SSH 접속(sshd 'Accepted' 로그)을 PC 마다 모아 키 지문을 키 주석으로, 주소를 장비 이름으로 풀어 표로."""
+    since, spec, as_json = 7 * 86400, None, False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--since" and i + 1 < len(args):
+            since = int(parse_since(args[i + 1]))
+            i += 2
+            continue
+        if a.startswith("--since="):
+            since = int(parse_since(a[len("--since="):]))
+        elif a == "--json":
+            as_json = True
+        elif a.startswith("-"):
+            die(AUDIT_USAGE)
+        else:
+            spec = a
+        i += 1
+    blocks = ssh_config_blocks()
+    try:
+        peers, _ = cached_peers()
+    except SystemExit:
+        peers = []
+    me = platform.node().split(".")[0]
+    targets: list[tuple[str, dict | None]] = []
+    if spec is None or spec in ("self", "local", "."):
+        targets = [(me, None)]
+    elif spec.lower() in ("all", "@all"):
+        targets = [(me, None)] + [(p["name"], p) for p in ssh_capable(peers)]
+    else:
+        targets = [(p["name"], p) for p in resolve_targets(cfg, blocks, spec)]
+    if not as_json:
+        print(c(f"linkmycom audit · {', '.join(t[0] for t in targets)} · 최근 {since // 3600}시간", "36"), file=sys.stderr)
+    ssh = ssh_bin() if any(p for _, p in targets) else None
+
+    def one(t: tuple[str, dict | None]) -> tuple[list[dict], list[str]]:
+        label, peer = t
+        if peer is None:
+            cmd = (["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encode_ps(audit_ps(since))]
+                   if os.name == "nt" else ["sh", "-c", audit_sh(since)])
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+                                   stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                return [], [str(e)]
+            return parse_audit(r.stdout, label)
+        if skip_without_ssh(peer):
+            return [], ["SSH 포트 닫힘(건너뜀)"]
+        rc, out, err = run_remote(peer, cfg, blocks, [audit_remote_command(peer["os"], since)], timeout=300, ssh=ssh)
+        if rc != 0 and not out.strip():
+            return [], [remote_rows_error([], err)]
+        return parse_audit(out, label)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        cf = pool.submit(key_comments, cfg)
+        results = parallel_map(one, targets)
+        comments = cf.result()
+    by_ip = {p["ip"]: p["name"] for p in peers if p.get("ip")}
+    try:  # 피어 목록에는 이 PC 가 없으므로 Tailscale 의 Self 주소도 이름으로 푼다.
+        for ip in (tailscale_status(soft=True).get("Self") or {}).get("TailscaleIPs") or []:
+            by_ip.setdefault(ip, me + " (이 PC)")
+    except (Exception, SystemExit):  # noqa: BLE001
+        pass
+    events: list[dict] = []
+    problems: list[str] = []
+    now = datetime.now(timezone.utc)
+    for (label, _), res in zip(targets, results):
+        if isinstance(res, BaseException):
+            problems.append(f"{label}: {res}")
+            continue
+        evs, errs = res
+        problems += [f"{label}: {e}" for e in errs]
+        events += [e for e in evs if e["time"] is None or (now - e["time"]).total_seconds() <= since]
+    for e in events:
+        e["key"] = comments.get(e["fp"], e["fp"] or "-")
+        e["from_name"] = by_ip.get(e["from"], e["from"])
+    events.sort(key=lambda e: e["time"].timestamp() if e["time"] else 0.0)
+    if as_json:
+        print(json.dumps({"events": [dict(e, time=e["time"].isoformat() if e["time"] else None) for e in events],
+                          "errors": problems}, ensure_ascii=False, indent=2))
+        return 1 if problems and not events else 0
+    for p in problems:
+        warn(p)
+    if not events:
+        print("들어온 SSH 접속 기록이 없습니다(로그를 읽을 권한이 없으면 비어 보일 수 있음).")
+        return 1 if problems else 0
+    rows = [[e["time"].astimezone().strftime("%m-%d %H:%M") if e["time"] else e["raw_time"], e["pc"], e["user"],
+             e["from_name"], e["key"], e["method"]] for e in events[-200:]]
+    print_table(rows, ["시각", "PC", "사용자", "어디서", "키", "방식"])
+    return 0
+
+
 # ---------------------------------------------------------------- 하위 명령.
 
 
@@ -4580,9 +5810,36 @@ COMMAND_HELP = {
               "  auto_update_apply, repo_dir, keys_url, keys_signer, ssh_options.<옵션>. 인자 없이 쓰면 현재 설정을 보인다.",
     "update": "linkmycom update [--check]\n  거울(jekim14/linkmycom-cli) 최신 릴리스의 linkmycom.py 를 받아 서명(linkmycom.py.sig)·SHA256·문법을\n"
               "  확인한 뒤에만 교체한다. --check 는 확인만.\n"
-              "  하루 한 번 자동 확인(auto_update_check)하고, 대화형 터미널이면 같은 확인 뒤 바로 교체한다(auto_update_apply,\n"
-              "  기본 true. 끄기: linkmycom config auto_update_apply=false). 파이프·--json 같은 비대화형은 확인만.\n"
-              "  자동 적용 실패는 ~/.tssh/state.json 의 update_error 에 남긴다.",
+              "  자동 확인(auto_update_check): 대화형 실행이면 1시간에 한 번 확인하고 같은 확인 뒤 바로 교체한다(auto_update_apply,\n"
+              "  기본 true. 끄기: linkmycom config auto_update_apply=false). 파이프·--json 같은 비대화형은 하루 한 번 확인만.\n"
+              "  자동 적용 실패는 ~/.tssh/state.json 의 update_error 에 남긴다.\n"
+              "linkmycom update --all [--check] [-n]\n"
+              "  이 PC 의 CLI → 타워 → 화면공유 앱을 거울의 v*·tower-v*·native-v* 최신과 비교해 차례로 적용한다.\n"
+              "  CLI 는 위와 같이 교체, 타워는 Update-LinkMyCom.ps1 -Mirror -Auto 실행, 화면공유 앱은 Windows 예약 작업\n"
+              "  LinkMyCom-NativeUpdate 시작(0.7.0 이전 설치본이 거부하면 관리자 실행 안내) / Mac Update-Native-Mac.sh --auto.\n"
+              "  화면공유 세션 중이면 업데이터가 미룬다. --check 는 비교만, -n 은 할 일만.",
+    "status": "linkmycom status [--json]\n"
+              "  이 PC 한 화면 요약: CLI·타워·화면공유 앱 판(거울 최신과 비교)과 각 자동 업데이트 상태(CLI 설정·마지막 확인,\n"
+              "  update-state.json 의 lastResult·checked, installing 이면 '설치 중'), 켜진 장비 수, 직접 연결 없이 중계로 보이는\n"
+              "  장비(CurAddr 없음), 앱의 받은 파일 기록 수(received.json, 24시간 안), 백그라운드 포트 전달.",
+    "open": "linkmycom open <이름> [공유/경로] [-n]\n"
+            "  그 PC 의 SMB 공유 폴더를 연다(Windows 탐색기 \\\\IP\\공유\\경로, macOS open smb://IP/공유/경로, Linux xdg-open).\n"
+            "  경로를 빼면 그 PC 의 공유 목록. -n 은 명령만 출력.",
+    "cp": "linkmycom cp [-r] [-n] <로컬 원본...> <이름>:<경로>\nlinkmycom cp [-r] [-n] <이름>:<경로>... <로컬 대상>\n"
+          "  scp 로 복사한다. 이름은 tailnet 주소로 풀고 set 으로 저장한 사용자·포트·키를 쓴다([사용자@]이름:경로 도 됨).\n"
+          "  Windows 대상은 scp -O(옛 프로토콜, Windows OpenSSH 서버 호환). 경로를 비우면 그 PC 의 홈. 한쪽만 원격이어야 한다.",
+    "wake": "linkmycom wake <이름> [--via <켜진 PC>] [-n]\n"
+            "  doctor(이름·--all)가 모아 ~/.tssh/macs.json 에 기억한 MAC 주소로 Wake-on-LAN 매직 패킷(UDP 9)을 보낸다.\n"
+            "  이 PC 가 그 PC 와 같은 LAN 이면 여기서, 아니면 기록상 같은 LAN 의 켜진 PC 에서 SSH 로 보낸다(--via 로 지정).",
+    "profiles": "linkmycom profiles windows-terminal|iterm [-n]\n"
+                "  PC 마다 'lmc <이름>' 을 여는 터미널 프로필을 만든다. Windows Terminal 은 JSON 조각\n"
+                "  %LOCALAPPDATA%\\Microsoft\\Windows Terminal\\Fragments\\LinkMyCom\\linkmycom.json, iTerm2 는\n"
+                "  ~/Library/Application Support/iTerm2/DynamicProfiles/linkmycom.json. 관리 표시(linkmycomManaged)가 있는\n"
+                "  파일만 다시 쓴다. -n 은 내용만 출력.",
+    "audit": "linkmycom audit [이름|이름,이름|all] [--since 7d] [--json]\n"
+             "  들어온 SSH 접속(sshd 의 Accepted 로그: Windows OpenSSH/Operational 이벤트, macOS log show, Linux journalctl·auth.log)\n"
+             "  을 모아 키 지문을 게시된 키 목록·authorized_keys 의 주석으로, 접속 주소를 장비 이름으로 풀어 '누가·언제·어디서' 표로.\n"
+             "  이름을 빼면 이 PC, all 은 이 PC 와 온라인 PC 전부(병렬). 로그를 읽을 권한이 없으면 비어 보일 수 있다.",
     "clip": "linkmycom clip <이름,...> [--text \"...\"] [--file <경로>...]\n"
             "  이 PC 의 클립보드(Windows Get-Clipboard, 파일 목록이면 files / macOS pbpaste / Linux wl-paste·xclip)나\n"
             "  --text·--file 을 그 PC 들의 LinkMyCom 앱 트레이(TCP 21120, 앱 0.6.0 이상)로 보낸다. 대상은 최대 3곳 병렬,\n"
@@ -4601,15 +5858,21 @@ COMMAND_HELP = {
               "  한 표(행 = PC)로 보이고, --json 은 그 결과를 JSON 으로 출력한다(이름을 줄 때·이 PC 도 --json 은\n"
               "  {name, ip, os, rows:[[점검, 상태, 내용]], error}). FAIL 이나 접속 실패가 있으면 종료 코드 1.\n"
               "  원격 Windows 에 파이썬이 없으면 PowerShell 만으로 sshd·방화벽·버전·21118 을 점검한다.\n"
+              "  이름을 주면 이 PC 에서 그 PC 의 21118 TCP 도달성과, 같은 장비의 다른 Tailscale 노드(이름·OS 가 닮고 21118 이\n"
+              "  한쪽만 열림, ssh-keyscan 호스트 키가 같음)를 함께 보고 'set <이름> screen=<다른 노드>' 를 안내한다.\n"
+              "  LAN·MAC 줄은 wake 를 위해 ~/.tssh/macs.json 에 기억한다.\n"
               "  --fix: 이 PC 의 결과 줄마다 고침 하나(키 갱신 예약 → 다시 예약, 키 갱신 → keys refresh, sshd·방화벽 → setup 의\n"
               "  서버 설정(UAC 한 번), 타워 실행 → Start-ControlTower -NoBrowser, PATH 의 lmc 중복 → 묻고 지움). -n 은 할 일만.",
     "exec": "linkmycom exec <이름|이름,이름|all> [--timeout 초] [--os windows|macos|linux] [--ps] -- <명령...>\n"
             "  BatchMode SSH 로 여러 PC 에 같은 명령을 병렬 실행하고 줄마다 '[이름] ' 을 붙여 출력한다. '--' 뒤는 그대로 넘긴다.\n"
             "  all 은 온라인 PC 중 모바일이 아니고 SSH 포트가 열린 것. 하나라도 실패하면 종료 코드 1(건너뛴 PC 는 실패 아님).\n"
             "  --os 는 그 OS 의 PC 만, --ps 는 Windows 대상의 명령을 PowerShell -EncodedCommand 로 감싼다.",
-    "fleet": "linkmycom fleet status [--json]\n  이 PC 와 온라인 PC 의 CLI·타워·화면공유 앱 버전·자동 업데이트(예약 작업·마지막 결과)를 한 표로(낡은 CLI 표시).\n"
+    "fleet": "linkmycom fleet status [--json]\n  이 PC 와 온라인 PC 의 CLI·타워·화면공유 앱 버전·자동 업데이트(예약 작업·마지막 결과)를 한 표로.\n"
+             "  판마다 거울의 v*·tower-v*·native-v* 최신과 비교해 '최신' 또는 '현재 → 최신' 으로 보인다(--json 은 행마다 latest·outdated).\n"
              "linkmycom fleet update [cli] [-n]\n  이 PC 의 CLI 보다 낡은 원격 설치본만 교체한다(-n: 할 일만 출력). 바꾸기 전 판은 옆에 .prev 로 남긴다.\n"
-             "  tower·native 는 아직 안내만 한다.\n"
+             "linkmycom fleet update native|tower [이름|a,b|all] [--apply]\n"
+             "  거울 최신보다 낡은 원격 PC 에서 업데이터를 SSH 로 시작한다(Windows 예약 작업 LinkMyCom-NativeUpdate·TowerUpdate,\n"
+             "  Mac Update-Native-Mac.sh --auto). --apply 가 없으면 할 일만 보인다. 화면공유 세션 중이면 업데이터가 미룬다.\n"
              "linkmycom fleet rollback <이름|이름,이름|all> cli [-n]\n  fleet update 가 남긴 .prev 로 그 PC 들의 CLI 설치본을 되돌린다.",
     "send": "linkmycom send <파일...> --to <이름,이름,...>\n"
             "  Taildrop(tailscale file cp)으로 보낸다. 대상마다 한 번에 모든 파일, 대상은 최대 3곳 병렬. 실패는 대상별로 표시.",
@@ -4637,15 +5900,17 @@ COMPLETION_WORDS = {
     "help": sorted(SUBCOMMANDS - {"ls"}),
     "completion": list(COMPLETION_SHELLS),
     "setup": ["--no-server", "--no-keys", "--no-schedule"],
-    "update": ["--check"],
-    "fleet": ["status", "update", "rollback", "cli", "tower", "native", "--json", "-n"],
+    "update": ["--check", "--all", "-n"],
+    "fleet": ["status", "update", "rollback", "cli", "tower", "native", "--json", "--apply", "-n"],
+    "profiles": ["windows-terminal", "iterm", "-n"],
+    "status": ["--json"],
     "inbox": ["--wait"],
     "list": ["--all", "--json"],
     "maintain": ["--quiet", "-n"],
     "sessions": ["list", "close", "-n"],
 }
 HOST_COMMANDS = ["set", "unset", "resolve", "screen", "display", "doctor", "exec", "forward", "send", "clip",
-                 "history", "hostkey"]
+                 "history", "hostkey", "open", "cp", "wake", "audit"]
 # 호스트 이름과 함께 옵션도 완성하는 명령.
 COMPLETION_HOST_FLAGS = {
     "screen": ["--gather", "--files", "--terminal", "--forward"],
@@ -4656,6 +5921,10 @@ COMPLETION_HOST_FLAGS = {
     "hostkey": ["reset", "--yes", "-n"],
     "send": ["--to"],
     "clip": ["--text", "--file"],
+    "open": ["-n"],
+    "cp": ["-r", "-n"],
+    "wake": ["--via", "-n"],
+    "audit": ["all", "--since", "--json"],
 }
 
 
@@ -4778,7 +6047,21 @@ def main(argv: list[str] | None = None) -> int:
     if sub == "doctor":
         return cmd_doctor(cfg, argv[1:])
     if sub == "update":
+        if "--all" in argv[1:]:
+            return cmd_update_all(cfg, check_only="--check" in argv[1:], dry="-n" in argv[1:] or "--dry-run" in argv[1:])
         return cmd_update(cfg, check_only="--check" in argv[1:])
+    if sub == "status":
+        return cmd_status(cfg, argv[1:])
+    if sub == "open":
+        return cmd_open(cfg, argv[1:])
+    if sub == "cp":
+        return cmd_cp(cfg, argv[1:])
+    if sub == "wake":
+        return cmd_wake(cfg, argv[1:])
+    if sub == "profiles":
+        return cmd_profiles(cfg, argv[1:])
+    if sub == "audit":
+        return cmd_audit(cfg, argv[1:])
     if sub == "config":
         cmd_config(cfg, argv[1:])
         return 0

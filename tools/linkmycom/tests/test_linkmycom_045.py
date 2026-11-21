@@ -300,6 +300,7 @@ class DoctorAllTests(unittest.TestCase):
                 mock.patch.object(linkmycom, "ssh_bin", return_value="ssh"), \
                 mock.patch.object(linkmycom, "ssh_config_blocks", return_value=[]), \
                 mock.patch.object(linkmycom, "port_open", side_effect=lambda ip, port, timeout=1.5: ip != "100.1.1.2"), \
+                mock.patch.object(linkmycom, "fetch_latest_components", return_value={}), \
                 mock.patch.object(linkmycom, "local_key_blob", return_value="AAAA"):
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(io.StringIO()):
@@ -409,20 +410,11 @@ class ExecTests(unittest.TestCase):
 # ---------------------------------------------------------------- C9. fleet.
 
 class FleetTests(unittest.TestCase):
-    def test_versions_and_update_command(self):
+    def test_versions(self):
+        # 0.6.0: 쓰이지 않던 fleet_update_command 는 지웠다(원격 CLI 갱신은 fleet_push_script 가 한다).
         self.assertEqual(linkmycom.cli_versions([("cli", "INFO", "linkmycom 0.4.1, tower 0.4.4")]),
                          {"linkmycom": "0.4.1", "tower": "0.4.4"})
-        win = linkmycom.fleet_update_command("windows", ["linkmycom", "tower"])
-        ps = base64.b64decode(win.split()[-1]).decode("utf-16-le")
-        self.assertIn(r'& "$env:LOCALAPPDATA\linkmycom\linkmycom.cmd" update', ps)
-        self.assertIn(r'& "$env:LOCALAPPDATA\DeskTools\tower\linkmycom.cmd" update', ps)
-        self.assertLess(len(win), 8000)
-        self.assertTrue(ps.startswith("lmc update"))  # PATH 의 lmc 가 부르는 설치본 먼저
-        mac = linkmycom.fleet_update_command("macOS", ["bin"], path_stale=False)
-        self.assertIn('/.local/bin/linkmycom', mac)
-        self.assertNotIn("lmc update;", mac)
-        only = base64.b64decode(linkmycom.fleet_update_command("windows", ["tower"], path_stale=False).split()[-1])
-        self.assertNotIn("lmc update", only.decode("utf-16-le"))
+        self.assertFalse(hasattr(linkmycom, "fleet_update_command"))
 
     def test_path_install_older_than_listed_ones(self):
         # jekim-1 처럼 PATH 의 lmc 가 %LOCALAPPDATA%\tssh 의 옛 설치본을 부르면 고정 위치가 최신이어도 낡음으로 본다.
@@ -436,7 +428,9 @@ class FleetTests(unittest.TestCase):
         with mock.patch.object(linkmycom, "fleet_rows", return_value=fleet), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(linkmycom.cmd_fleet({}, ["update", "-n"]), 0)
         self.assertIn("jekim-1: lmc(PATH)", out.getvalue())
-        with mock.patch.object(linkmycom, "fleet_rows", return_value=fleet), redirect_stdout(io.StringIO()) as out:
+        with mock.patch.object(linkmycom, "fleet_rows", return_value=fleet), \
+                mock.patch.object(linkmycom, "fetch_latest_components", return_value={}), \
+                redirect_stdout(io.StringIO()) as out:
             linkmycom.cmd_fleet({}, ["status"])
         self.assertIn("CLI 낡음: lmc 0.4.3", out.getvalue())
 
@@ -477,9 +471,14 @@ class FleetTests(unittest.TestCase):
         self.assertIn("LMCPUSH", stdin_seen[0])
         self.assertTrue(stdin_seen[0].rstrip().endswith(linkmycom.DOCTOR_STDIN_END))  # Windows 는 종료 표시 줄
         self.assertIn("tower: 0.4.1->", out.getvalue())
-        with redirect_stdout(io.StringIO()) as out:
+        # 0.6.0(C7): native·tower 는 원격 업데이터를 시작한다. --apply 가 없으면 할 일만 보이고 원격에 손대지 않는다.
+        with mock.patch.object(linkmycom, "fleet_rows", return_value=rows), \
+                mock.patch.object(linkmycom, "fetch_latest_components", return_value={}), \
+                mock.patch.object(linkmycom, "ssh_config_blocks", return_value=[]), \
+                mock.patch.object(linkmycom, "run_remote", side_effect=AssertionError("--apply 없이 원격 실행 금지")), \
+                redirect_stdout(io.StringIO()) as out:
             self.assertEqual(linkmycom.cmd_fleet({}, ["update", "native"]), 0)
-        self.assertIn("Deploy-NativeHost.ps1", out.getvalue())
+        self.assertIn("새로 받을 원격 PC 가 없습니다", out.getvalue())
 
 
 # ---------------------------------------------------------------- C10. screen 모드·forward.

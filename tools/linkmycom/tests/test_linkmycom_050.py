@@ -66,7 +66,7 @@ class TempHome(unittest.TestCase):
 
 class BasicsTests(unittest.TestCase):
     def test_version_and_commands(self):
-        self.assertEqual(linkmycom.__version__, "0.5.2")
+        self.assertGreaterEqual(linkmycom.parse_version(linkmycom.__version__), (0, 5, 2))
         for sub in ("clip", "maintain", "history", "hostkey", "sessions"):
             self.assertIn(sub, linkmycom.SUBCOMMANDS)
             self.assertIn(sub, linkmycom.COMMAND_HELP)
@@ -219,15 +219,15 @@ class ClipTests(TempHome):
 
 class AutoUpdateTests(TempHome):
     def test_apply_quietly_replaces_and_notifies(self):
-        st, notice = {"update_available": "0.5.9"}, []
-        with mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"src", "0.5.9")), \
+        st, notice = {"update_available": "9.5.9"}, []
+        with mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"src", "9.5.9")), \
                 mock.patch.object(linkmycom, "write_self") as ws:
             self.assertTrue(linkmycom.apply_update_quietly("r", {}, st, notice))
         ws.assert_called_once()
         self.assertEqual(ws.call_args[0][1], b"src")
-        self.assertEqual(notice, ["linkmycom 0.5.9 으로 업데이트했습니다. 다음 실행부터 적용."])
+        self.assertEqual(notice, ["linkmycom 9.5.9 으로 업데이트했습니다. 다음 실행부터 적용."])
         self.assertNotIn("update_available", st)
-        self.assertEqual(st["last_auto_update"], "0.5.9")
+        self.assertEqual(st["last_auto_update"], "9.5.9")
 
     def test_apply_failure_is_recorded_quietly(self):
         st, notice = {}, []
@@ -240,9 +240,9 @@ class AutoUpdateTests(TempHome):
 
     def run_check(self, apply: bool):
         notice: list[str] = []
-        rel = {"tag_name": "v0.5.9"}
+        rel = {"tag_name": "v9.5.9"}
         with mock.patch.object(linkmycom, "latest_release", return_value=rel), \
-                mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"src", "0.5.9")), \
+                mock.patch.object(linkmycom, "fetch_release_source", return_value=(b"src", "9.5.9")), \
                 mock.patch.object(linkmycom, "write_self") as ws:
             t = linkmycom.background_update_check({"auto_update_check": True}, notice, apply=apply)
             t.join(5)
@@ -251,14 +251,14 @@ class AutoUpdateTests(TempHome):
     def test_background_applies_when_allowed(self):
         notice, ws = self.run_check(True)
         ws.assert_called_once()
-        self.assertIn("0.5.9 으로 업데이트했습니다", notice[0])
-        self.assertEqual(self.state().get("last_auto_update"), "0.5.9")
+        self.assertIn("9.5.9 으로 업데이트했습니다", notice[0])
+        self.assertEqual(self.state().get("last_auto_update"), "9.5.9")
 
     def test_background_only_checks_when_not_allowed(self):
         notice, ws = self.run_check(False)
         ws.assert_not_called()
         self.assertIn("'linkmycom update' 로 적용하세요", notice[0])
-        self.assertEqual(self.state().get("update_available"), "0.5.9")
+        self.assertEqual(self.state().get("update_available"), "9.5.9")
 
     def test_allowed_needs_config_and_tty(self):
         self.assertFalse(linkmycom.auto_apply_allowed({"auto_update_apply": False}))
@@ -298,7 +298,9 @@ class DoctorRowsTests(unittest.TestCase):
         fleet = [{"name": "me", "ip": "(이 PC)", "os": "windows", "peer": None, "error": "",
                   "rows": [("cli", "INFO", f"tower {linkmycom.__version__}"),
                            ("auto_update", "OK", "tasks LinkMyCom-NativeUpdate; last installed 2026-11-18 04:30")]}]
-        with mock.patch.object(linkmycom, "fleet_rows", return_value=fleet), redirect_stdout(io.StringIO()) as out:
+        with mock.patch.object(linkmycom, "fleet_rows", return_value=fleet), \
+                mock.patch.object(linkmycom, "fetch_latest_components", return_value={}), \
+                redirect_stdout(io.StringIO()) as out:
             linkmycom.cmd_fleet({}, ["status"])
         self.assertIn("자동 업데이트", out.getvalue())
         self.assertIn("OK installed", out.getvalue())

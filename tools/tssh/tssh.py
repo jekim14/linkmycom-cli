@@ -88,7 +88,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -2718,6 +2718,28 @@ WINDOWS_NOPY_DOCTOR_PS = "; ".join([
 ])
 
 
+STDIN_WAIT_SECONDS = 25
+STDIN_TIMEOUT_MARK = "LMCSTDIN|timeout"
+
+
+def windows_stdin_read_lines(var: str) -> list[str]:
+    """Windows 원격 실행기가 표준 입력에서 종료 표시 줄까지 읽어 var 에 문자열로 담는 PowerShell 줄들(0.7.1).
+
+    0.7.0 까지는 [Console]::In.ReadLine() 으로 종료 표시 줄을 기다렸다. sshd 기본 셸이 PowerShell 이면 명령이
+    'powershell -c "powershell -EncodedCommand …"' 로 두 겹이 되고, 가끔 안쪽 PowerShell 에 종료 표시 줄이 닿지 않아
+    영원히 기다렸다(jekim-1, 2026-11-26: 40시간 동안 멈춘 프로세스 36쌍). 이제 줄마다 시간 제한(STDIN_WAIT_SECONDS)을 두고
+    읽고, 넘으면 STDIN_TIMEOUT_MARK 한 줄을 내고 프로세스를 끝낸다. 부르는 쪽(run_remote)이 그 줄을 보면 한 번 다시 시도한다.
+    [Console]::In 의 비동기 읽기는 사실은 동기라 원시 스트림 위의 StreamReader 를 쓴다.
+    sshd 기본 셸이 cmd.exe 면 명령줄 한도가 8191자라 변수 이름과 공백을 아꼈다(시험이 길이를 확인한다).
+    """
+    return [
+        "$r=New-Object IO.StreamReader([Console]::OpenStandardInput());$a=@()",
+        "while(1){$t=$r.ReadLineAsync();if(!$t.Wait(" + str(STDIN_WAIT_SECONDS * 1000) + ")){[Console]::WriteLine('" + STDIN_TIMEOUT_MARK
+        + "');[Environment]::Exit(3)};$l=$t.Result;if($null -eq $l -or $l -eq '" + DOCTOR_STDIN_END + "'){break};$a+=$l}",
+        var + "=($a -join \"`n\").Trim()",
+    ]
+
+
 def doctor_remote_command(os_name: str, key_blob: str = "", versions_only: bool = False) -> tuple[str, str | None]:
     """원격 PC 에서 같은 점검 스크립트를 돌리는 (명령 한 줄, ssh 표준 입력으로 보낼 내용).
 
@@ -2730,14 +2752,14 @@ def doctor_remote_command(os_name: str, key_blob: str = "", versions_only: bool 
     if os_name == "windows":
         lines = [
             "$py = $null",
-            "foreach ($n in @('python','python3','py')) { $c = Get-Command $n -ErrorAction SilentlyContinue | "
-            "Where-Object { $_.Source -notlike '*WindowsApps*' } | Select-Object -First 1; if ($c) { $py = $c.Source; break } }",
+            # -ea 0 과 ? 는 -ErrorAction SilentlyContinue 와 Where-Object 다(cmd.exe 명령줄 한도 8191자 안에 넣으려고 줄였다).
+            "foreach ($n in @('python','python3','py')) { $c = Get-Command $n -ea 0 | "
+            "? { $_.Source -notlike '*WindowsApps*' } | Select-Object -First 1; if ($c) { $py = $c.Source; break } }",
             "if (-not $py) { " + WINDOWS_NOPY_DOCTOR_PS + "; exit 0 }",
             # Windows OpenSSH sometimes never delivers the stdin EOF to a nested PowerShell, so ReadToEnd() hung
-            # for the full timeout and left orphaned wrappers (officehermes, 2026-11-13). Read up to a sentinel line.
-            "$lines = New-Object System.Collections.Generic.List[string]",
-            "while ($null -ne ($l = [Console]::In.ReadLine())) { if ($l -eq '" + DOCTOR_STDIN_END + "') { break }; $lines.Add($l) }",
-            "$code = ($lines -join \"`n\").Trim()",
+            # for the full timeout and left orphaned wrappers (officehermes, 2026-11-13). Read up to a sentinel line,
+            # and give up after STDIN_WAIT_SECONDS when even the sentinel never arrives (0.7.1).
+            *windows_stdin_read_lines("$code"),
             "& $py -c $code" + tail,
         ]
         return ("powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n"),
@@ -3036,6 +3058,34 @@ def remote_ssh_cmd(peer: dict, cfg: dict, blocks: list[dict], remote: list[str],
     return cmd + list(remote)
 
 
+def stuck_launcher_reap_command(min_age_seconds: int = 100) -> str:
+    """원격 Windows 에서 멈춘 채 남은 lmc 실행기만 끝내는 명령(0.7.1). 표준 입력을 쓰지 않는다.
+
+    실행기는 '$py = $null' 로 시작하는 EncodedCommand 라 명령줄에 그 base64 앞머리가 있다. SSH 세션(세션 0)의 powershell 중
+    그 앞머리를 가진, min_age_seconds 넘은 것만 고른다. 시간 초과가 난 직후에 불러 방금 멈춘 실행기도 치운다
+    (2026-11-26: 치우지 않으면 PC 마다 수십~백여 개가 남아 메모리 수 GB 를 잡았다).
+    """
+    sig = encode_ps("$py = $null\n")[:32]
+    lines = [
+        "$s = '" + sig + "'",
+        "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.ProcessId -ne $PID -and $_.SessionId -eq 0 "
+        "-and $_.CommandLine -and $_.CommandLine.Contains($s) -and ((Get-Date) - $_.CreationDate).TotalSeconds -gt "
+        + str(int(min_age_seconds)) + " } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; 'LMCREAP|' + $_.ProcessId }",
+    ]
+    return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n")
+
+
+def reap_stuck_launchers(peer: dict, cfg: dict, blocks: list[dict], ssh: str | None = None) -> int:
+    """시간 초과가 난 Windows 원격에 남은 실행기를 치운다. 치운 개수(실패하면 0). 예외를 올리지 않는다."""
+    try:
+        cmd = remote_ssh_cmd(peer, cfg, blocks, [stuck_launcher_reap_command()], ssh)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=40,
+                           stdin=subprocess.DEVNULL)
+    except (SystemExit, OSError, subprocess.TimeoutExpired):
+        return 0
+    return sum(1 for line in (r.stdout or "").splitlines() if line.startswith("LMCREAP|"))
+
+
 def run_remote(peer: dict, cfg: dict, blocks: list[dict], remote: list[str], stdin_text: str | None = None,
                timeout: float | None = 120, ssh: str | None = None) -> tuple[int, str, str]:
     """원격 명령을 돌려 (종료 코드, stdout, stderr). 예외·die 없이 실패도 값으로 돌려준다(작업 스레드에서 쓴다)."""
@@ -3044,13 +3094,21 @@ def run_remote(peer: dict, cfg: dict, blocks: list[dict], remote: list[str], std
     except SystemExit:
         return 255, "", "주소를 알 수 없음"
     kwargs: dict = {"input": stdin_text} if stdin_text is not None else {"stdin": subprocess.DEVNULL}
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-                           **kwargs)
-    except subprocess.TimeoutExpired:
-        return 124, "", f"{int(timeout or 0)}초 안에 끝나지 않음"
-    except OSError as e:
-        return 255, "", str(e)
+    # 표준 입력으로 보낸 스크립트가 원격 실행기에 닿지 않으면(STDIN_TIMEOUT_MARK) 한 번 다시 시도한다(0.7.1).
+    for attempt in (1, 2):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                               **kwargs)
+        except subprocess.TimeoutExpired:
+            if stdin_text is not None and str(peer.get("os") or "").lower() == "windows":
+                reap_stuck_launchers(peer, cfg, blocks, ssh)
+            return 124, "", f"{int(timeout or 0)}초 안에 끝나지 않음"
+        except OSError as e:
+            return 255, "", str(e)
+        if stdin_text is None or attempt == 2 or STDIN_TIMEOUT_MARK not in (r.stdout or ""):
+            break
+    if stdin_text is not None and STDIN_TIMEOUT_MARK in (r.stdout or ""):
+        return 124, "", f"원격 실행기가 스크립트를 받지 못했습니다(표준 입력 {STDIN_WAIT_SECONDS}초 대기, 두 번 시도)"
     return r.returncode, r.stdout or "", r.stderr or ""
 
 
@@ -3371,9 +3429,8 @@ def fleet_push_command(os_name: str) -> tuple[str, bool]:
             "Where-Object { $_.Source -notlike '*WindowsApps*' } | Select-Object -First 1; if ($c) { $py = $c.Source; break } }",
             "if (-not $py) { 'LMCPUSH|python|python 3 not found'; exit 0 }",
             "$f = Join-Path $env:TEMP ('lmc-push-' + [guid]::NewGuid().ToString('N') + '.py')",
-            "$sb = New-Object System.Text.StringBuilder",
-            "while ($null -ne ($l = [Console]::In.ReadLine())) { if ($l -eq '" + DOCTOR_STDIN_END + "') { break }; [void]$sb.AppendLine($l) }",
-            "[IO.File]::WriteAllText($f, $sb.ToString())",
+            *windows_stdin_read_lines("$body"),
+            "[IO.File]::WriteAllText($f, $body + \"`n\")",
             "try { & $py $f } finally { Remove-Item $f -Force -ErrorAction SilentlyContinue }",
         ]
         return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n"), True
@@ -3500,7 +3557,7 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
             path = path_lmc_version(r["rows"])
             path_stale, labels = stale_installs(r["rows"])
             old = ([f"lmc {path[1]}"] if path_stale and path else []) + [f"{k} {vers[k]}" for k in labels]
-            newer = [COMPONENT_LABELS[k] for k in outdated_components(row_versions(r["rows"]), latest) if k != "cli"]
+            newer = [COMPONENT_LABELS[k] for k in outdated_components(row_versions(r["rows"]), latest, r["os"]) if k != "cli"]
             notes = ([c("CLI 낡음: " + ", ".join(old), "33")] if old else []) + \
                 ([c("새 판: " + ", ".join(newer), "33")] if newer else []) + \
                 [c(f"{label}: {det}", "33") for label, det in row_warnings(r["rows"])]
@@ -3508,7 +3565,7 @@ def cmd_fleet(cfg: dict, args: list[str]) -> int:
 
             def cell(name: str) -> str:
                 v = d.get(name, "-")
-                return version_cell(v, latest.get(name, "")) if VERSION_RE.match(v or "") else v
+                return version_cell(v, latest_for(latest, name, r["os"])) if VERSION_RE.match(v or "") else v
 
             table.append([r["name"], os_label(r["os"]), version_cell(path[1], latest.get("cli", "")) if path else "-",
                           ", ".join(f"{k} {v}" for k, v in vers.items()) or "-",
@@ -5034,7 +5091,33 @@ def latest_components(rels: list) -> dict[str, str]:
                 best = m.group(1)
         if best:
             out[comp] = best
+    # 0.7.1: 화면공유 앱은 Mac 패키지가 실린 판만 Mac 의 최신이다(0.6.1·0.7.0·0.8.0 은 Windows 만 게시).
+    # 그렇지 않으면 Mac 이 받을 수 없는 판 때문에 계속 '낡음'으로 잡히고 fleet update --wait 가 끝까지 기다린다.
+    pat = re.compile("^" + re.escape(COMPONENT_TAGS["native"]) + r"(\d+(?:\.\d+)+)$")
+    best = ""
+    for r in rels:
+        if not isinstance(r, dict) or r.get("draft") or r.get("prerelease"):
+            continue
+        m = pat.match(str(r.get("tag_name") or ""))
+        assets = r.get("assets") if isinstance(r.get("assets"), list) else []
+        if m and any("macos" in str((a or {}).get("name") or "").lower() and str((a or {}).get("name") or "").endswith(".zip")
+                     for a in assets if isinstance(a, dict)):
+            if not best or parse_version(m.group(1)) > parse_version(best):
+                best = m.group(1)
+    if best:
+        out["native_macos"] = best
     return out
+
+
+def latest_for(latest: dict[str, str], comp: str, os_name: str = "") -> str:
+    """그 OS 가 실제로 받을 수 있는 최신 판. Mac 의 화면공유 앱은 Mac 패키지가 있는 판(native_macos)만 본다(없으면 빈 문자열)."""
+    if comp == "native" and str(os_name or "").lower() in ("macos", "darwin", "mac"):
+        return latest.get("native_macos", "")
+    return latest.get(comp, "")
+
+
+def local_os_name() -> str:
+    return "macos" if platform.system() == "Darwin" else ""
 
 
 def fetch_latest_components(cfg: dict, timeout: float = 10.0) -> dict[str, str]:
@@ -5191,7 +5274,7 @@ def cmd_update_all(cfg: dict, check_only: bool = False, dry: bool = False) -> in
     pending = 0
     for comp in ("cli", "tower", "native"):
         label = COMPONENT_LABELS[comp]
-        cur, new = have.get(comp) or "", latest.get(comp) or ""
+        cur, new = have.get(comp) or "", latest_for(latest, comp, local_os_name()) or ""
         if not cur:
             print(f"{label}: 설치되지 않음")
             continue
@@ -5361,7 +5444,7 @@ def cmd_status(cfg: dict, args: list[str]) -> int:
                 auto_text = f"새 버전 {auto['available']} 설치 중"
         else:
             auto_text = auto or "-"
-        rows.append([COMPONENT_LABELS[comp], version_cell(cur, latest.get(comp, "")) if cur else "설치 안 됨",
+        rows.append([COMPONENT_LABELS[comp], version_cell(cur, latest_for(latest, comp, local_os_name())) if cur else "설치 안 됨",
                      "자동 업데이트: " + auto_text if cur else "-"])
     dev = data["devices"]
     rows.append(["장비", f"켜짐 {dev['online']} / {dev['total']}",
@@ -5402,9 +5485,10 @@ def row_versions(rows: list[tuple[str, str, str]]) -> dict[str, str]:
     return {"cli": cli, "tower": ver(d.get("tower")), "native": ver(d.get("native"))}
 
 
-def outdated_components(vers: dict[str, str], latest: dict[str, str]) -> list[str]:
+def outdated_components(vers: dict[str, str], latest: dict[str, str], os_name: str = "") -> list[str]:
     return [k for k in ("cli", "tower", "native")
-            if vers.get(k) and latest.get(k) and parse_version(vers[k]) < parse_version(latest[k])]
+            if vers.get(k) and latest_for(latest, k, os_name)
+            and parse_version(vers[k]) < parse_version(latest_for(latest, k, os_name))]
 
 
 def version_cell(cur: str, new: str) -> str:
@@ -5516,9 +5600,13 @@ def update_state_read_command(what: str, os_name: str) -> str:
     if os_name == "windows":
         where = ("Join-Path $env:LOCALAPPDATA 'DeskTools\\tower\\update-state.json'" if what == "tower"
                  else "Join-Path $env:ProgramData 'LinkMyCom\\update-state.json'")
+        # 상태 파일은 BOM 없는 UTF-8 이고 message 에 한글이 든다. Windows PowerShell 은 그것을 기본 코드 페이지로 읽어 JSON 을 깨뜨리므로
+        # (0.7.0 실기: --wait 가 'unreadable') UTF-8 로 읽고, 판정에 쓰는 세 필드만 ASCII JSON 으로 다시 만들어 보낸다.
         lines = ["$p = " + where,
-                 "if (Test-Path -LiteralPath $p) { 'LMCSTATE|' + ((Get-Content -Raw -LiteralPath $p) -replace '\\s+', ' ') } "
-                 "else { 'LMCSTATE|' }"]
+                 "if (-not (Test-Path -LiteralPath $p)) { 'LMCSTATE|'; exit 0 }",
+                 "try { $o = Get-Content -Raw -Encoding UTF8 -LiteralPath $p | ConvertFrom-Json; "
+                 "'LMCSTATE|' + (([ordered]@{ lastResult = [string]$o.lastResult; checked = [string]$o.checked; "
+                 "available = [string]$o.available }) | ConvertTo-Json -Compress) } catch { 'LMCSTATE|{bad' }"]
         return "powershell -NoProfile -NonInteractive -EncodedCommand " + encode_ps("\n".join(lines) + "\n")
     return ('printf "LMCSTATE|"; cat "$HOME/Library/Application Support/LinkMyCom/update-state.json" 2>/dev/null | tr "\\n" " "; echo')
 
@@ -5607,7 +5695,10 @@ def cmd_fleet_component(cfg: dict, what: str, rest: list[str]) -> int:
         cur = row_versions(r["rows"]).get(what)
         if not cur:
             continue
-        if new and parse_version(cur) >= parse_version(new) and only is None:
+        new_here = latest_for(latest, what, r["os"]) if latest else ""
+        if latest and not new_here and only is None:
+            continue  # 이 OS 용 패키지가 실린 판이 없다(Mac 의 화면공유 앱)
+        if new_here and parse_version(cur) >= parse_version(new_here) and only is None:
             continue
         # 한 Mac 에 Tailscale 이 둘이면 같은 장비가 두 행으로 나온다. 업데이터는 한 번만 시작한다.
         twin = next((p for p, _ in plan if related_nodes(r["peer"], [p["peer"]])), None)
@@ -5628,7 +5719,7 @@ def cmd_fleet_component(cfg: dict, what: str, rest: list[str]) -> int:
     for r, cur in plan:
         how = (f"예약 작업 {NATIVE_UPDATE_TASK if what == 'native' else TOWER_UPDATE_TASK} 시작" if r["os"] == "windows"
                else "Update-Native-Mac.sh --auto 시작")
-        print(f"{r['name']}: {label} {cur} → {new or '확인 필요'} · {how}")
+        print(f"{r['name']}: {label} {cur} → {latest_for(latest, what, r['os']) or '확인 필요'} · {how}")
     if not apply:
         print("실행하려면 --apply 를 붙이세요(--apply --wait 는 결과까지 기다림). 화면공유 세션 중인 PC 는 업데이터가 스스로 미룹니다.")
         return 0

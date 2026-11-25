@@ -71,7 +71,7 @@ class TempHome(unittest.TestCase):
 
 class BasicsTests(unittest.TestCase):
     def test_version_and_command_tables(self):
-        self.assertEqual(linkmycom.__version__, "0.7.0")
+        self.assertEqual(linkmycom.__version__, "0.7.1")
         for sub in ("hide", "unhide", "forget"):
             self.assertIn(sub, linkmycom.SUBCOMMANDS)
             self.assertIn(sub, linkmycom.COMMAND_HELP)
@@ -496,6 +496,12 @@ class TowerUpdateTests(unittest.TestCase):
         self.assertEqual(linkmycom.parse_state_line("LMCSTATE|\n"), {"result": "", "checked": "", "available": ""})
         self.assertIsNone(linkmycom.parse_state_line("ssh: connection refused\n"))
         self.assertEqual(linkmycom.parse_state_line("LMCSTATE|{bad\n")["result"], "unreadable")
+        # 0.7.1: Windows 상태 파일(BOM 없는 UTF-8, 한글 message)을 UTF-8 로 읽고 판정에 쓰는 필드만 ASCII 로 보낸다.
+        for what in ("tower", "native"):
+            ps = ps_of(linkmycom.update_state_read_command(what, "windows"))
+            self.assertIn("-Encoding UTF8", ps)
+            self.assertIn("ConvertTo-Json -Compress", ps)
+            self.assertNotIn("message", ps)
         before = {"result": "ok", "checked": "2026-11-25T09:30:00Z", "available": ""}
         self.assertIsNone(linkmycom.update_wait_verdict(before, dict(before)))  # 아직 이번 실행이 기록되지 않음
         self.assertIsNone(linkmycom.update_wait_verdict(before, {"result": "installing", "checked": "2026-11-26T09:30:12Z"}))
@@ -840,6 +846,101 @@ class StatusSummaryTests(TempHome):
         data = json.loads(out.getvalue())
         self.assertIsNone(data["disk"])
         self.assertEqual(data["next"], [])
+
+# ---------------------------------------------------------------- 0.7.1: 원격 실행기의 표준 입력 읽기와 Mac 의 최신 판.
+
+class StdinLauncherTests(unittest.TestCase):
+    def test_reader_has_a_time_limit_and_distinct_variables(self):
+        lines = "\n".join(linkmycom.windows_stdin_read_lines("$code"))
+        self.assertIn(linkmycom.STDIN_TIMEOUT_MARK, lines)
+        self.assertIn(".Wait(%d)" % (linkmycom.STDIN_WAIT_SECONDS * 1000), lines)
+        self.assertIn("[Environment]::Exit(3)", lines)
+        self.assertIn("OpenStandardInput", lines)   # [Console]::In 의 비동기 읽기는 동기라 시간 제한이 듣지 않는다
+        self.assertNotIn("[Console]::In.", lines)
+        # PowerShell 변수는 대소문자를 가리지 않는다. 줄($l)과 목록이 같은 이름이면 코드가 사라진다(0.7.1 개발 중 실기에서 잡음).
+        names = set(re.findall(r"\$([A-Za-z]\w*)", lines)) - {"null", "code"}
+        self.assertEqual(len(names), len({n.lower() for n in names}), names)
+
+    def test_windows_launchers_fit_the_cmd_exe_limit(self):
+        blob = "A" * 68   # ed25519 공개키의 base64 길이
+        for versions in (False, True):
+            cmd, stdin_text = linkmycom.doctor_remote_command("windows", blob, versions_only=versions)
+            self.assertLessEqual(len(cmd), 8191, "cmd.exe 명령줄 한도를 넘었습니다")
+            self.assertTrue(stdin_text.endswith(linkmycom.DOCTOR_STDIN_END + "\n"))
+            self.assertIn(linkmycom.STDIN_TIMEOUT_MARK, ps_of(cmd))
+
+    def test_run_remote_retries_once_when_the_script_did_not_arrive(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(kwargs.get("input"))
+            out = linkmycom.STDIN_TIMEOUT_MARK + "\n" if len(calls) == 1 else "LMCDOC|cli|INFO|tower 0.7.1\n"
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+
+        with mock.patch.object(linkmycom, "remote_ssh_cmd", return_value=["ssh", "x"]), \
+                mock.patch.object(linkmycom.subprocess, "run", side_effect=fake_run):
+            rc, out, err = linkmycom.run_remote(PFL, {}, [], ["cmd"], "code\n")
+        self.assertEqual((rc, len(calls)), (0, 2))
+        self.assertIn("LMCDOC|cli", out)
+
+        calls.clear()
+        with mock.patch.object(linkmycom, "remote_ssh_cmd", return_value=["ssh", "x"]), \
+                mock.patch.object(linkmycom.subprocess, "run",
+                                  side_effect=lambda cmd, **k: (calls.append(1), subprocess.CompletedProcess(
+                                      cmd, 3, linkmycom.STDIN_TIMEOUT_MARK + "\n", ""))[1]):
+            rc, out, err = linkmycom.run_remote(PFL, {}, [], ["cmd"], "code\n")
+        self.assertEqual((rc, len(calls)), (124, 2))
+        self.assertIn("받지 못했습니다", err)
+
+
+    def test_timeout_reaps_stuck_launchers_on_windows_only(self):
+        sig = linkmycom.encode_ps("$py = $null\n")[:32]
+        cmd, _ = linkmycom.doctor_remote_command("windows", versions_only=True)
+        self.assertIn(sig, cmd)                                   # 실행기 명령줄에 그 앞머리가 실제로 있다
+        reap = linkmycom.stuck_launcher_reap_command()
+        self.assertNotIn(sig, reap)                               # 치우는 명령 자신은 대상이 아니다
+        script = ps_of(reap)
+        self.assertIn(sig, script)
+        self.assertIn("SessionId -eq 0", script)
+        self.assertIn("TotalSeconds -gt 100", script)
+        seen = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append(kwargs.get("input"))
+            if kwargs.get("input") is not None:
+                raise subprocess.TimeoutExpired(cmd, 120)
+            return subprocess.CompletedProcess(cmd, 0, "LMCREAP|11\nLMCREAP|12\n", "")
+
+        with mock.patch.object(linkmycom, "remote_ssh_cmd", return_value=["ssh", "x"]), \
+                mock.patch.object(linkmycom.subprocess, "run", side_effect=fake_run):
+            rc, _, err = linkmycom.run_remote(PFL, {}, [], ["cmd"], "code\n")
+            self.assertEqual((rc, seen), (124, ["code\n", None]))  # 시간 초과 뒤 정리 명령을 한 번 보냈다
+            seen.clear()
+            rc, _, _ = linkmycom.run_remote(MAC, {}, [], ["cmd"], "code\n")
+            self.assertEqual((rc, seen), (124, ["code\n"]))        # Mac 에는 보내지 않는다
+            self.assertEqual(linkmycom.reap_stuck_launchers(PFL, {}, []), 2)
+
+class MacLatestTests(unittest.TestCase):
+    RELS = [
+        {"tag_name": "native-v0.8.0", "assets": [{"name": "linkmycom-native-0.8.0-windows-x64.zip"}]},
+        {"tag_name": "native-v0.6.0", "assets": [{"name": "linkmycom-native-0.6.0-windows-x64.zip"},
+                                                {"name": "linkmycom-native-0.6.0-macos-arm64.zip"},
+                                                {"name": "linkmycom-native-0.6.0-macos-arm64.zip.sig"}]},
+        {"tag_name": "native-v0.9.0", "prerelease": True, "assets": [{"name": "linkmycom-native-0.9.0-macos-arm64.zip"}]},
+        {"tag_name": "v0.7.1"}, {"tag_name": "tower-v0.6.0"},
+    ]
+
+    def test_mac_only_counts_releases_with_a_mac_package(self):
+        latest = linkmycom.latest_components(self.RELS)
+        self.assertEqual(latest["native"], "0.8.0")
+        self.assertEqual(latest["native_macos"], "0.6.0")
+        self.assertEqual(linkmycom.latest_for(latest, "native", "macOS"), "0.6.0")
+        self.assertEqual(linkmycom.latest_for(latest, "native", "windows"), "0.8.0")
+        self.assertEqual(linkmycom.latest_for(latest, "cli", "macOS"), "0.7.1")
+        self.assertEqual(linkmycom.latest_for({"native": "0.8.0"}, "native", "macos"), "")
+        self.assertEqual(linkmycom.outdated_components({"cli": "0.7.1", "tower": "", "native": "0.6.0"}, latest, "macOS"), [])
+        self.assertEqual(linkmycom.outdated_components({"cli": "0.7.1", "tower": "", "native": "0.7.0"}, latest, "windows"),
+                         ["native"])
 
 
 if __name__ == "__main__":

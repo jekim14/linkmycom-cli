@@ -461,7 +461,8 @@ class AuditTests(TempHome):
 # ---------------------------------------------------------------- C7. fleet 최신 판정·원격 업데이터.
 
 class FleetComponentTests(unittest.TestCase):
-    LATEST = {"cli": "0.6.0", "tower": "0.5.0", "native": "0.7.0"}
+    # native_macos: Mac 패키지가 실린 가장 높은 판(0.7.1 부터 Mac 은 이것만 최신으로 본다). 이 시험들은 Mac 패키지가 있는 경우다.
+    LATEST = {"cli": "0.6.0", "tower": "0.5.0", "native": "0.7.0", "native_macos": "0.7.0"}
 
     def rows(self):
         v = linkmycom.__version__

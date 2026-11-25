@@ -69,7 +69,7 @@ class TempHome(unittest.TestCase):
 
 class BasicsTests(unittest.TestCase):
     def test_version_commands_help_completion(self):
-        self.assertEqual(linkmycom.__version__, "0.6.0")
+        self.assertGreaterEqual(linkmycom.parse_version(linkmycom.__version__), (0, 6, 0))  # 0.7.0 에서 올라감
         for sub in ("open", "cp", "wake", "profiles", "audit", "status"):
             self.assertIn(sub, linkmycom.SUBCOMMANDS)
             self.assertIn(sub, linkmycom.COMMAND_HELP)

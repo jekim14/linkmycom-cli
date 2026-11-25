@@ -197,7 +197,7 @@ class DoctorScriptTests(unittest.TestCase):
         s = linkmycom.DOCTOR_PY
         self.assertTrue(s.isascii())
         compile(s, "doctor", "exec")
-        self.assertEqual(s.count('"powershell"'), 1)  # PowerShell 은 한 번만 띄운다
+        self.assertEqual(s.count('"powershell"'), 1)  # PowerShell 은 한 번만 띄운다(0.7.0: 업데이터 프로세스 조회도 같은 실행에 실음)
         self.assertIn('TASK = "%s"' % linkmycom.SCHEDULE_TASK_NAME, s)
         self.assertIn('LAUNCHD = "%s"' % linkmycom.LAUNCHD_LABEL, s)
         self.assertIn('UNIT = "%s"' % linkmycom.SYSTEMD_UNIT, s)
@@ -219,6 +219,10 @@ class DoctorScriptTests(unittest.TestCase):
         # 0.5.0: fleet status 의 '자동 업데이트' 열을 위해 --versions 에도 auto_update 줄이 붙는다(Windows·macOS).
         if os.name == "nt" or sys.platform == "darwin":
             want.append("auto_update")
+        # 0.7.0: 예약 작업 3종(Windows), 디스크 여유, 업데이터 프로세스 줄이 --versions 에도 붙는다(fleet status·status 가 읽음).
+        if os.name == "nt":
+            want += ["task_tower", "task_tower_update", "task_native_update"]
+        want += ["disk", "updater"]
         self.assertEqual(names, want)
         self.assertLess(took, 20)
 
@@ -539,7 +543,8 @@ class HelpCompletionTests(unittest.TestCase):
                 self.assertIn(word, text)
         ps = linkmycom.completion_script("powershell")
         self.assertIn("'screen' { $words = @('--gather'", ps)
-        self.assertIn("{ @('set', 'unset', 'resolve', 'display') -contains $_ }", ps)  # 옵션 있는 명령은 일반 호스트 줄에서 빠져 덮어쓰지 않는다
+        # 옵션 있는 명령은 일반 호스트 줄에서 빠져 덮어쓰지 않는다(0.7.0: 옵션 없는 hide·unhide 가 일반 호스트 줄에 더해짐).
+        self.assertIn("{ @('set', 'unset', 'resolve', 'display', 'hide', 'unhide') -contains $_ }", ps)
 
 
 if __name__ == "__main__":

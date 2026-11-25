@@ -37,8 +37,16 @@ function Test-LinkMyComSignature([string]$File, [string]$SigFile, [string]$Keyge
     $out = Join-Path $dir "verify.out"
     $err = Join-Path $dir "verify.err"
     # The data goes in as a redirected file. A pipe stalls ssh-keygen inside Windows OpenSSH sessions (CLI 0.4.7).
-    $p = Start-Process -FilePath $Keygen -ArgumentList @("-Y", "verify", "-f", "`"$allowed`"", "-I", $SignerIdentity, "-n", $SigNamespace, "-s", "`"$SigFile`"") `
-        -RedirectStandardInput $File -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -Wait -PassThru
+    # Inside an SSH session sshd leaves a *_POSIX_FD_STATE variable that makes the Windows ssh-keygen read the SSH channel
+    # instead of its real standard input, so it never ends (measured 2026-11-21). Hide it for this call only.
+    $fdState = @(Get-ChildItem env: | Where-Object { $_.Name -like '*_POSIX_FD_STATE' })
+    foreach ($fdVar in $fdState) { Remove-Item -LiteralPath "env:$($fdVar.Name)" }
+    try {
+        $p = Start-Process -FilePath $Keygen -ArgumentList @("-Y", "verify", "-f", "`"$allowed`"", "-I", $SignerIdentity, "-n", $SigNamespace, "-s", "`"$SigFile`"") `
+            -RedirectStandardInput $File -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -Wait -PassThru
+    } finally {
+        foreach ($fdVar in $fdState) { Set-Item -LiteralPath "env:$($fdVar.Name)" -Value $fdVar.Value }
+    }
     return ($p.ExitCode -eq 0)
 }
 

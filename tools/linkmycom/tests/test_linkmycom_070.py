@@ -71,7 +71,7 @@ class TempHome(unittest.TestCase):
 
 class BasicsTests(unittest.TestCase):
     def test_version_and_command_tables(self):
-        self.assertEqual(linkmycom.__version__, "0.7.2")
+        self.assertEqual(linkmycom.__version__, "0.7.3")
         for sub in ("hide", "unhide", "forget"):
             self.assertIn(sub, linkmycom.SUBCOMMANDS)
             self.assertIn(sub, linkmycom.COMMAND_HELP)
@@ -211,6 +211,10 @@ class PermissionTests(unittest.TestCase):
         self.assertIn("--style compact", s)
         self.assertIn('subsystem == "com.apple.TCC"', s)
         self.assertIn("open -g -a", s)
+        # 0.7.3: 창 프로세스를 '^BIN$' 로 찾으면 빈 인수를 달고 뜬 창을 놓쳐 닫지 못한다. 인수에 ' --' 가 없는 것으로 고른다.
+        self.assertNotIn('pgrep -f "^$BIN\\$"', s)
+        self.assertIn("mainpids()", s)
+        self.assertEqual(s.count("$(mainpids)"), 2)
         self.assertIn("kill $STREAM", s)
         self.assertNotIn("pkill -f", s)  # 패턴으로 남의 프로세스를 죽이지 않는다
         self.assertNotIn("--server", s)  # 화면공유 서비스 프로세스는 건드리지 않는다

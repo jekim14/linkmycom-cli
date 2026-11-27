@@ -88,7 +88,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.7.2"
+__version__ = "0.7.3"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -2888,20 +2888,24 @@ def cmd_doctor(cfg: dict, args: list[str]) -> int:
 # Mac 에서 LinkMyCom 창을 잠깐 열면 권한 검사가 tccd 로그(com.apple.TCC)에 AUTHREQ 줄로 남는다. sudo 로 그 로그를 읽는다.
 # 이 스크립트가 띄운 log stream 과 앱 창 프로세스만 끝내고 앱의 --server 프로세스(화면공유 서비스)는 건드리지 않는다.
 # sudo 에 비밀번호가 필요하면(sudo -n 이 안 됨) 아무것도 실행하지 않고 'LMCTCC|NOSUDO' 만 낸다.
+# 앱 창 프로세스(mainpids)는 실행 파일이 BIN 이고 '--' 로 시작하는 인수(--server 등)가 없는 것이다. 창이 빈 인수를 달고 뜨면
+# pgrep -f 에는 '…/LinkMyCom OSLogRateLimit=64' 처럼 보여 '^BIN$' 로는 찾지 못했고, 닫지 못한 창 때문에 다음 점검이
+# 판정을 못 했다(macmini, 2026-11-27 → 0.7.3).
 MAC_PERM_SCRIPT = r'''
 APP=/Applications/LinkMyCom.app
 BIN="$APP/Contents/MacOS/LinkMyCom"
 if [ ! -d "$APP" ]; then echo "LMCTCC|NOAPP"; exit 0; fi
 if ! sudo -n true 2>/dev/null; then echo "LMCTCC|NOSUDO"; exit 0; fi
 OUT=$(mktemp /tmp/lmc-perm.XXXXXX)
-before=$(pgrep -f "^$BIN\$" | tr '\n' ' ')
+mainpids() { for p in $(pgrep -f "^$BIN"); do ps -o args= -p "$p" 2>/dev/null | grep -q -- ' --' || printf '%s ' "$p"; done; }
+before=$(mainpids)
 sudo -n log stream --info --debug --style compact --predicate '(subsystem == "com.apple.TCC" AND (eventMessage CONTAINS "AUTHREQ" OR eventMessage CONTAINS[c] "linkmycom"))' > "$OUT" 2>/dev/null &
 STREAM=$!
 sleep 2
 open -g -a "$APP"
 sleep 16
 sudo -n pkill -P $STREAM 2>/dev/null; sudo -n kill $STREAM 2>/dev/null
-after=$(pgrep -f "^$BIN\$" | tr '\n' ' ')
+after=$(mainpids)
 for p in $after; do case " $before " in *" $p "*) ;; *) kill "$p" 2>/dev/null ;; esac; done
 echo "LMCTCC|BEGIN"
 ids=$(grep -a -i 'linkmycom' "$OUT" | grep -a -o 'msgID=[0-9.]*' | sort -u)

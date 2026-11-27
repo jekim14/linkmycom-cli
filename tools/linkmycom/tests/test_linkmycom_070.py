@@ -71,7 +71,7 @@ class TempHome(unittest.TestCase):
 
 class BasicsTests(unittest.TestCase):
     def test_version_and_command_tables(self):
-        self.assertEqual(linkmycom.__version__, "0.7.1")
+        self.assertEqual(linkmycom.__version__, "0.7.2")
         for sub in ("hide", "unhide", "forget"):
             self.assertIn(sub, linkmycom.SUBCOMMANDS)
             self.assertIn(sub, linkmycom.COMMAND_HELP)
@@ -941,6 +941,26 @@ class MacLatestTests(unittest.TestCase):
         self.assertEqual(linkmycom.outdated_components({"cli": "0.7.1", "tower": "", "native": "0.6.0"}, latest, "macOS"), [])
         self.assertEqual(linkmycom.outdated_components({"cli": "0.7.1", "tower": "", "native": "0.7.0"}, latest, "windows"),
                          ["native"])
+
+
+# ---------------------------------------------------------------- 0.7.2: 백신(V3)이 막던 원격 점검 명령.
+
+class AntivirusFriendlyLauncherTests(unittest.TestCase):
+    def test_doctor_launcher_has_no_socket_client(self):
+        # 인코딩된 PowerShell 명령줄에 소켓 클라이언트가 들어 있으면 V3 가 역방향 셸로 보고 프로세스 생성을 막는다
+        # (Execution/MDP.Powershell.M2514, jekimlabtop 2026-11-27 실기: TcpClient 줄을 빼자 경고 없이 실행됨).
+        for versions in (False, True):
+            cmd, _ = linkmycom.doctor_remote_command("windows", "A" * 68, versions_only=versions)
+            script = ps_of(cmd)
+            for bad in ("Net.Sockets", "TcpClient", "DownloadString", "Invoke-Expression"):
+                self.assertNotIn(bad.lower(), script.lower(), bad)
+            self.assertIn("Get-NetTCPConnection -LocalPort 21118 -State Listen", script)
+            self.assertIn("LMCDOC|screen_svc|", script)
+
+    def test_refused_exec_is_reported_as_blocked(self):
+        err = "exec request failed on channel 0\n"
+        self.assertIn("명령 실행을 거부", linkmycom.remote_rows_error([], err))
+        self.assertIn("Connection timed out", linkmycom.remote_rows_error([], "ssh: connect to host x port 22: Connection timed out"))
 
 
 if __name__ == "__main__":

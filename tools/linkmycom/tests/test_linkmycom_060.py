@@ -654,7 +654,9 @@ class StatusTests(TempHome):
                 mock.patch.object(linkmycom, "local_component_versions",
                                   return_value={"cli": "0.6.0", "tower": "", "native": "0.6.1"}):
             data = linkmycom.status_data({}, {"native": "0.7.0"}, [PFL, MAC, OFF, PHONE])
-            with mock.patch.object(linkmycom, "fetch_latest_components", return_value={"native": "0.7.0"}), \
+            # native_macos: Mac 에서 이 시험을 돌리면 Mac 패키지가 실린 판만 최신으로 본다(0.7.1). 그 판도 0.7.0 인 경우다.
+            with mock.patch.object(linkmycom, "fetch_latest_components",
+                                   return_value={"native": "0.7.0", "native_macos": "0.7.0"}), \
                     mock.patch.object(linkmycom, "cached_peers", return_value=([PFL, MAC, OFF, PHONE], True)), \
                     redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(linkmycom.cmd_status({}, []), 0)

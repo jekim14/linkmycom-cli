@@ -88,7 +88,7 @@ from pathlib import Path
 
 # difflib·tempfile·threading·urllib.request·concurrent.futures 는 쓰는 함수 안에서 늦게 임포트한다(시작 시간 절약).
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 # linkmycom(옛 tssh)은 LinkMyCom 저장소(jekim14/linkmycom, 비공개)의 tools/linkmycom 에서 개발하고, 공개 거울 저장소
 # jekim14/linkmycom-cli(옛 jekim14/tssh)의 같은 경로로 배포한다. 거울은 옛 설치본을 위해 tools/tssh/ 에도 같은 파일을 둔다. 업데이트·공개키 목록·설치 스크립트는 인증 없이 받을 수 있는 거울에서 가져온다.
@@ -2709,7 +2709,10 @@ WINDOWS_NOPY_DOCTOR_PS = "; ".join([
     "$u = @(foreach ($j in 'LinkMyCom-NativeUpdate', 'LinkMyCom-TowerUpdate') { schtasks /Query /TN $j 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { $j } })",
     "'LMCDOC|auto_update|' + $(if ($u.Count) { 'OK|tasks ' + ($u -join ',') } elseif ($n) { 'WARN|missing LinkMyCom-NativeUpdate' } "
     "else { 'INFO|no updater job (native/tower not installed)' })",
-    "$l = $false; try { $k = New-Object Net.Sockets.TcpClient; $k.Connect('127.0.0.1', 21118); $l = $true; $k.Close() } catch {}",
+    # 0.7.2: 여기서 Net.Sockets.TcpClient 로 21118 에 붙어 보던 것을 뺐다. 이 블록은 -EncodedCommand 명령줄에 실리는데,
+    # 소켓 클라이언트를 만드는 인코딩된 PowerShell 을 AhnLab V3 가 행위 탐지(Execution/MDP.Powershell.M2514)로 막아
+    # 그 PC 의 원격 점검이 'exec request failed' 로 실패하고 점검 때마다 경고가 떴다(jekimlabtop, 2026-11-27).
+    "$l = [bool](Get-NetTCPConnection -LocalPort 21118 -State Listen -ErrorAction SilentlyContinue)",
     "'LMCDOC|screen_svc|' + $(if ($l) { 'OK|21118 listening' } else { 'WARN|21118 not listening' })",
     "$c = Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | "
     "Sort-Object { $_.NetAdapter.MediaType -ne '802.3' } | Select-Object -First 1",
@@ -3022,6 +3025,7 @@ def print_doctor_json(result: dict) -> int:
 # accept-new: 처음 보는 PC 의 호스트 키는 묻지 않고 받되, 바뀐 키는 여전히 거부한다(대화형 접속에는 붙이지 않는다).
 BATCH_SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new"]
 HOSTKEY_FAILED = "Host key verification failed"
+EXEC_REFUSED = "exec request failed on channel"
 REMOTE_WORKERS = 5
 
 
@@ -3145,6 +3149,9 @@ def remote_rows_error(rows: list[tuple[str, str, str]], err: str) -> str:
     if not rows:
         if HOSTKEY_FAILED in (err or ""):
             return "SSH 실패: 호스트 키가 바뀜('linkmycom hostkey reset <이름>' 으로 지문 확인 뒤 다시 등록)"
+        if EXEC_REFUSED in (err or ""):
+            # 로그인은 됐는데 sshd 가 명령 프로세스를 만들지 못했다. 그 PC 의 백신이 명령을 막았을 때 이렇게 보인다(0.7.2).
+            return "SSH 실패: 원격 PC 가 명령 실행을 거부함(그 PC 의 백신·보안 프로그램 기록을 확인)"
         return f"SSH 실패: {last_line(err, '출력 없음')}"
     if rows[0][0] == "python" and rows[0][1] == "FAIL":
         return "원격에 파이썬 3 이 없어 점검하지 못함"
